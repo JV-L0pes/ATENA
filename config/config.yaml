@@ -1,0 +1,42 @@
+# Configuração do Sistema de Detecção de EPIs
+# Sistema híbrido: IA + lógica Python para validação
+
+# Configurações do modelo
+model:
+  weights: "yolov5/runs/train/epi_detection_v24/weights/best.pt"
+  conf_threshold: 0.5
+  iou_threshold: 0.45
+  device: "cuda"  # Usar GPU se disponível
+
+# Classes para detecção (baseado no dataset treinado)
+classes:
+  helmet: 0      # Capacete - índice 0 no dataset
+  no-helmet: 1   # Infração de capacete - índice 1 no dataset
+  no-vest: 2     # Infração de colete - índice 2 no dataset
+  person: 3      # Pessoa (âncora principal) - índice 3 no dataset
+  vest: 4        # Colete - índice 4 no dataset
+
+# Regiões de validação (proporções da altura da pessoa)
+validation:
+  head_region:
+    height: 0.25  # Topo 25% da altura da pessoa
+  torso_region:
+    start: 0.15   # 15% a partir do topo
+    end: 0.7      # 70% da altura da pessoa
+  overlap_threshold: 0.3  # IoU mínimo para considerar sobreposição
+
+# Cores para visualização
+visualization:
+  colors:
+    person: [255, 255, 0]        # Amarelo para pessoa
+    helmet_correct: [0, 255, 0]   # Verde para capacete correto
+    helmet_violation: [0, 0, 255] # Vermelho para infração de capacete
+    vest_correct: [0, 255, 0]     # Verde para colete correto
+    vest_violation: [0, 0, 255]   # Vermelho para infração de colete
+  line_thickness: 2
+  font_scale: 0.6
+
+# Configurações de logging
+logging:
+  level: "INFO"
+  file: "atena.log"

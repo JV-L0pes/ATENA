@@ -1,0 +1,42 @@
+# Hyperparameters for EPI detection training
+# Optimized for helmet and vest detection with person anchor
+
+# Learning rate
+lr0: 0.01
+lrf: 0.1
+
+# Momentum
+momentum: 0.937
+weight_decay: 0.0005
+
+# Warmup
+warmup_epochs: 3
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+
+# Data augmentation
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+degrees: 10.0
+translate: 0.1
+scale: 0.5
+shear: 2.0
+perspective: 0.0
+flipud: 0.0
+fliplr: 0.5
+mosaic: 1.0
+mixup: 0.1
+copy_paste: 0.1
+
+# Loss weights
+box: 0.05
+cls: 0.5
+cls_pw: 1.0
+obj: 1.0
+obj_pw: 1.0
+
+# IoU thresholds
+iou_t: 0.2
+anchor_t: 4.0
+fl_gamma: 0.0

@@ -1,0 +1,58 @@
+# Hyperparameters otimizados para DETECÇÃO A LONGA DISTÂNCIA
+# Foco em objetos pequenos e distantes (capacete/colete longe)
+
+# Learning rate (reduzido para estabilidade)
+lr0: 0.003          # Reduzido para estabilidade
+lrf: 0.03           # Reduzido para estabilidade
+
+# Momentum e regularização
+momentum: 0.937
+weight_decay: 0.0005
+
+# Warmup (aumentado para estabilizar)
+warmup_epochs: 8    # Aumentado para estabilizar
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+
+# MULTI-SCALE TRAINING para longa distância
+# Treina com diferentes resoluções para melhorar detecção de objetos pequenos
+multi_scale: [320, 416, 512, 640, 768, 832]  # Múltiplas resoluções
+scale_aug: 0.8      # Aumentado para mais variação de escala
+
+# Data augmentation AGGRESSIVO para longa distância
+hsv_h: 0.015
+hsv_s: 0.8          # Aumentado para variação de cor
+hsv_v: 0.5          # Aumentado para variação de brilho
+degrees: 20.0       # Aumentado para rotação
+translate: 0.3       # Aumentado para translação
+scale: 0.8          # Aumentado para variação de escala
+shear: 5.0          # Aumentado para distorção
+perspective: 0.002  # Aumentado para perspectiva
+flipud: 0.2         # Aumentado para flip vertical
+fliplr: 0.5
+mosaic: 1.0
+mixup: 0.3          # Aumentado para mixup
+copy_paste: 0.3     # Aumentado para copy-paste
+
+# Loss weights otimizados para objetos pequenos
+box: 0.08           # Aumentado para melhor localização
+cls: 0.9            # Aumentado para classificação
+cls_pw: 1.0
+obj: 1.2            # Aumentado para detecção de objetos
+obj_pw: 1.0
+
+# IoU thresholds otimizados para objetos pequenos
+iou_t: 0.15         # Reduzido para objetos pequenos
+anchor_t: 3.0       # Reduzido para melhor matching
+fl_gamma: 2.0       # Focal Loss para objetos difíceis
+
+# Class weights para dataset balanceado
+# helmet: 1.0, no-helmet: 22.5, no-vest: 3.2, person: 1.0, vest: 2.2
+class_weights: [1.0, 22.5, 3.2, 1.0, 2.2]
+
+# Configurações específicas para longa distância
+long_distance:
+  min_size: 8       # Tamanho mínimo de objeto (pixels)
+  max_size: 200     # Tamanho máximo de objeto (pixels)
+  overlap_threshold: 0.2  # IoU reduzido para objetos pequenos
+  confidence_threshold: 0.3  # Confiança reduzida para capturar mais detecções

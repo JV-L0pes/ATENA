@@ -1,0 +1,74 @@
+# Configuração do Sistema de Detecção Automática de EPIs V2.0
+# Foco: Validação física dos equipamentos na pessoa
+
+# Configurações do modelo YOLO
+model:
+  weights: "yolov5/runs/train/epi_detection_v24/weights/best.pt"
+  conf_threshold: 0.5
+  iou_threshold: 0.45
+  device: "cuda"  # Usar GPU se disponível
+
+# Classes para detecção (baseado no dataset treinado)
+classes:
+  helmet: 0      # Capacete - índice 0 no dataset
+  no-helmet: 1   # Infração de capacete - índice 1 no dataset
+  no-vest: 2     # Infração de colete - índice 2 no dataset
+  person: 3      # Pessoa (âncora principal) - índice 3 no dataset
+  vest: 4        # Colete - índice 4 no dataset
+
+# Configurações de validação física dos EPIs
+validation:
+  # Zonas anatômicas (proporções da altura da pessoa)
+  head_region:
+    height: 0.25  # Topo 25% da altura da pessoa
+  
+  torso_region:
+    start: 0.30   # 30% a partir do topo
+    end: 0.70     # 70% da altura da pessoa
+  
+  # Thresholds de sobreposição para validação
+  helmet_overlap_threshold: 0.3  # IoU mínimo para considerar capacete na cabeça
+  vest_overlap_threshold: 0.25   # IoU mínimo para considerar colete no torso
+  
+  # Regras adicionais de validação
+  helmet_rules:
+    max_distance_from_head: 50   # pixels máximos da zona da cabeça
+    min_size_ratio: 0.1          # tamanho mínimo do capacete em relação à pessoa
+  
+  vest_rules:
+    min_torso_coverage: 0.4      # cobertura mínima do torso
+    max_width_ratio: 1.5         # largura máxima em relação à pessoa
+
+# Cores para visualização
+visualization:
+  colors:
+    person: [255, 255, 0]        # Amarelo para pessoa
+    helmet_correct: [0, 255, 0]   # Verde para capacete correto
+    helmet_violation: [0, 0, 255] # Vermelho para infração de capacete
+    vest_correct: [0, 255, 0]     # Verde para colete correto
+    vest_violation: [0, 0, 255]   # Vermelho para infração de colete
+    no_helmet: [0, 0, 255]       # Vermelho para ausência de capacete
+    no_vest: [0, 0, 255]         # Vermelho para ausência de colete
+  
+  line_thickness: 2
+  font_scale: 0.6
+  label_offset: 10
+
+# Configurações de logging
+logging:
+  level: "INFO"
+  file: "epi_detection_v2.log"
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+
+# Configurações de performance
+performance:
+  max_detections: 50             # Máximo de detecções por frame
+  batch_size: 1                  # Tamanho do batch para inferência
+  enable_tracking: false         # Tracking entre frames (desabilitado por padrão)
+  
+# Configurações de ambiente
+environment:
+  construction_site: true        # Ambiente de canteiro de obra
+  lighting_conditions: "mixed"   # Condições de iluminação variadas
+  camera_height: 3.0            # Altura da câmera em metros
+  camera_angle: 15              # Ângulo da câmera em graus

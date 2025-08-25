@@ -1,0 +1,46 @@
+# Hyperparameters otimizados para dataset DESBALANCEADO
+# Foco em melhorar detecção de 'no-helmet' e 'no-vest'
+
+# Learning rate (reduzido para evitar overfitting)
+lr0: 0.005          # Reduzido de 0.01
+lrf: 0.05           # Reduzido de 0.1
+
+# Momentum e regularização
+momentum: 0.937
+weight_decay: 0.0005
+
+# Warmup (aumentado para estabilizar)
+warmup_epochs: 5    # Aumentado de 3
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+
+# Data augmentation AGGRESSIVO para classes minoritárias
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+degrees: 15.0       # Aumentado de 10.0
+translate: 0.2       # Aumentado de 0.1
+scale: 0.6          # Aumentado de 0.5
+shear: 3.0          # Aumentado de 2.0
+perspective: 0.001  # Adicionado
+flipud: 0.1         # Adicionado
+fliplr: 0.5
+mosaic: 1.0
+mixup: 0.2          # Aumentado de 0.1
+copy_paste: 0.2     # Aumentado de 0.1
+
+# Loss weights otimizados para dataset desbalanceado
+box: 0.05
+cls: 0.8            # Aumentado de 0.5 (foco em classificação)
+cls_pw: 1.0
+obj: 1.0
+obj_pw: 1.0
+
+# IoU thresholds
+iou_t: 0.2
+anchor_t: 4.0
+fl_gamma: 1.5       # Focal Loss para classes minoritárias
+
+# Class weights para dataset desbalanceado
+# helmet: 1.0, no-helmet: 22.5, no-vest: 3.2, person: 1.0, vest: 2.2
+class_weights: [1.0, 22.5, 3.2, 1.0, 2.2]
