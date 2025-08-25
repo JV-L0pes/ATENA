@@ -1,36 +1,39 @@
-# Configuração Anti-Veículo/Moto para Detecção de Pessoas
+# Configurações otimizadas para o novo sistema
 # Sistema para diferenciar pessoas de motos e outros veículos
 
-# Validações de Altura e Proporção
-height_validation:
-  min_height_px: 140          # Altura mínima em pixels para ser pessoa
+# Restrições para pessoas
+human_constraints:
+  min_height_px: 120          # Reduzido para capturar pessoas mais distantes
   max_height_px: 3000         # Altura máxima em pixels
   
-  # Proporções anatômicas humanas RIGOROSAS
-  min_aspect_ratio: 1.8       # Altura/largura mínima (pessoas são MUITO mais altas)
+  # Proporções anatômicas humanas (mais flexível)
+  min_aspect_ratio: 1.6       # Altura/largura mínima (mais flexível para diferentes poses)
   max_aspect_ratio: 6.0       # Altura/largura máxima
   
   # Tamanhos mínimos
   min_width_px: 30            # Largura mínima em pixels
   min_height_px_small: 50     # Altura mínima em pixels para objetos pequenos
 
-# Validações Anti-Veículo (MAIS RIGOROSAS)
-vehicle_detection:
-  # 🏍️ DETECÇÃO ESPECÍFICA DE MOTOS:
-  motorcycle_threshold:
-    min_ratio: 0.7            # Largura/altura mínima para ser considerado moto
-    max_ratio: 1.3            # Largura/altura máxima para ser considerado moto
+# Assinaturas de veículos para detecção
+vehicle_signatures:
+  motorcycle:
+    width_height_ratio_min: 0.6    # Largura/altura mínima para ser considerado moto
+    width_height_ratio_max: 1.4    # Largura/altura máxima para ser considerado moto
+    min_width: 80                  # Largura mínima em pixels
+    typical_area_range: [5000, 50000]  # Faixa típica de área para motos
   
   # Formas retangulares (típicas de veículos)
-  rectangular_threshold:
-    min_ratio: 0.8            # Largura/altura mínima para ser considerado retangular
-    max_ratio: 1.2            # Largura/altura máxima para ser considerado retangular
+  rectangular_forms:
+    width_height_ratio_min: 0.8    # Largura/altura mínima para ser considerado retangular
+    width_height_ratio_max: 1.2    # Largura/altura máxima para ser considerado retangular
   
   # Veículos muito largos
-  wide_vehicle_threshold: 1.5  # Largura/altura para detectar veículos largos
+  wide_vehicles:
+    width_height_ratio_threshold: 1.5  # Largura/altura para detectar veículos largos
   
   # Objetos óbvios
-  obvious_vehicle_threshold: 2.0  # Largura/altura para veículos extremamente largos
+  obvious_vehicles:
+    width_height_ratio_threshold: 2.0  # Largura/altura para veículos extremamente largos
 
 # Validação de Movimento
 movement_validation:
@@ -41,16 +44,28 @@ movement_validation:
   min_frames_for_analysis: 3      # Frames mínimos para validar movimento
   max_history_frames: 10          # Frames máximos no histórico
 
-# Thresholds de Confiança (AJUSTADOS PARA 0.25)
+# Thresholds de confiança otimizados
 confidence_thresholds:
-  high_confidence: 0.5        # Confiança alta = valida com filtros rigorosos
-  medium_high_confidence: 0.4 # Confiança média-alta = valida com filtros médios
-  medium_confidence: 0.25     # Confiança média = filtros rigorosos (AJUSTADO)
-  low_confidence: 0.25        # Confiança baixa = rejeita (AJUSTADO)
+  high_confidence: 0.6        # Confiança alta = validação relaxada
+  medium_confidence: 0.4      # Confiança média = validação rigorosa
+  low_confidence: 0.25        # Confiança baixa = rejeita
+
+# Configurações OTIMIZADAS para canteiro de obra
+confidence:
+  person: 0.15        # MUITO baixo - captura pessoas distantes
+  helmet: 0.25        # Médio - capacetes têm formas distintas  
+  vest: 0.20          # Baixo - coletes podem ter cores variadas
+  no-helmet: 0.30     # Médio-alto - infrações devem ser claras
+  no-vest: 0.30       # Médio-alto - infrações devem ser claras
+
+iou:
+  detection: 0.25     # Baixo - permite sobreposições
+  validation: 0.30    # Médio - validação de EPIs
+  nms: 0.45          # Padrão - Non-Maximum Suppression
 
 # Logging e Debug
 debug:
-  enable_detailed_logs: true   # Logs detalhados de validação
+  enable_detailed_logs: true   # Logs detalhados de validaçãocls
   show_rejection_reasons: true # Mostra razões de rejeição
   log_movement_analysis: true  # Logs de análise de movimento
   log_vehicle_detection: true  # Logs específicos de detecção de veículos
