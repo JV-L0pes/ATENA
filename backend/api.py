@@ -408,6 +408,21 @@ async def take_snapshot():
         logger.error(f"Erro ao capturar snapshot: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/start_detection")
+async def start_detection():
+    """Força o início da detecção de vídeo"""
+    try:
+        if not app_state.detection_system:
+            raise HTTPException(status_code=503, detail="Sistema de detecção não inicializado")
+        
+        # Forçar início do loop de vídeo
+        app_state.detection_system.start_video_thread()
+        
+        return {"message": "Detecção iniciada", "status": "success"}
+    except Exception as e:
+        logger.error(f"Erro ao iniciar detecção: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao iniciar detecção: {str(e)}")
+
 @app.get("/stats")
 async def get_stats():
     """Retorna estatísticas atuais expandidas"""

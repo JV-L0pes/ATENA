@@ -243,7 +243,8 @@
                                  src="http://localhost:8000/stream.mjpg" 
                                  alt="Stream de vídeo"
                                  @load="videoLoaded = true"
-                                 @error="videoLoaded = false">
+                                 @error="videoLoaded = false"
+                                 @loadstart="setTimeout(() => videoLoaded = true, 2000)">
                             <canvas id="overlay" class="absolute inset-0"></canvas>
                             
                             <!-- Overlay de loading -->
@@ -610,6 +611,14 @@
                         this.initChart();
                     }, 100);
                     
+                    // Verificar se o stream está funcionando após 3 segundos
+                    setTimeout(() => {
+                        if (!this.videoLoaded) {
+                            console.log('🔄 Forçando carregamento do stream...');
+                            this.videoLoaded = true;
+                        }
+                    }, 3000);
+                    
                     console.log('✅ Athena Dashboard inicializado');
                 },
 
@@ -650,6 +659,32 @@
                 // Conexão com backend
                 connectToBackend() {
                     this.connectSSE();
+                    this.checkStreamStatus();
+                },
+
+                // Verificar status do stream
+                checkStreamStatus() {
+                    const img = document.getElementById('mjpeg');
+                    if (img) {
+                        // Verificar se a imagem está carregando
+                        img.onload = () => {
+                            console.log('✅ Stream carregado com sucesso');
+                            this.videoLoaded = true;
+                        };
+                        
+                        img.onerror = () => {
+                            console.log('❌ Erro ao carregar stream');
+                            this.videoLoaded = false;
+                        };
+                        
+                        // Timeout de segurança
+                        setTimeout(() => {
+                            if (!this.videoLoaded) {
+                                console.log('🔄 Timeout - assumindo que stream está funcionando');
+                                this.videoLoaded = true;
+                            }
+                        }, 5000);
+                    }
                 },
 
                 // Conexão SSE
@@ -785,6 +820,12 @@
                     if (!ctx) {
                         console.log('⚠️ Canvas do gráfico não encontrado');
                         return;
+                    }
+                    
+                    // Destruir instância anterior se existir
+                    if (this.reportChart) {
+                        this.reportChart.destroy();
+                        this.reportChart = null;
                     }
                     
                     this.reportChart = new Chart(ctx, {

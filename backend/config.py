@@ -22,8 +22,8 @@ class BackendConfig:
     MODEL_MAX_DETECTIONS = int(os.getenv("MODEL_MAX_DETECTIONS", "50"))
     
     # Configurações de dispositivo (CPU/GPU)
-    FORCE_CPU_ONLY = os.getenv("FORCE_CPU_ONLY", "true").lower() == "true"  # Padrão CPU para evitar erros
-    DEVICE_PREFERENCE = os.getenv("DEVICE_PREFERENCE", "cpu")  # Padrão CPU, pode ser alterado via frontend
+    FORCE_CPU_ONLY = os.getenv("FORCE_CPU_ONLY", "false").lower() == "true"  # Padrão GPU com fallback
+    DEVICE_PREFERENCE = os.getenv("DEVICE_PREFERENCE", "auto")  # Padrão auto (GPU se disponível, senão CPU)
     
     # Configurações de vídeo
     VIDEO_SOURCE = int(os.getenv("VIDEO_SOURCE", "0"))

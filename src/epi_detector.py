@@ -74,13 +74,21 @@ class EPIDetector:
             
             # Tentar carregar modelo com dispositivo selecionado
             try:
+                if self.device.type == 'cuda':
+                    logger.info(f"🚀 Carregando modelo na GPU: {self.device}")
+                    # Limpar cache CUDA se necessário
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                
                 self.model = torch.hub.load('ultralytics/yolov5', 'custom', 
                                           path=str(self.model_path), 
                                           device=self.device,
                                           force_reload=True)
+                logger.info(f"✅ Modelo carregado com sucesso no dispositivo: {self.device}")
+                
             except Exception as device_error:
-                logger.warning(f"Erro ao carregar com dispositivo {self.device}: {device_error}")
-                logger.info("Tentando carregar com CPU...")
+                logger.warning(f"❌ Erro ao carregar com dispositivo {self.device}: {device_error}")
+                logger.info("🔄 Fazendo fallback para CPU...")
                 
                 # Fallback para CPU se houver erro com GPU
                 self.device = torch.device("cpu")
@@ -88,7 +96,7 @@ class EPIDetector:
                                           path=str(self.model_path), 
                                           device=self.device,
                                           force_reload=True)
-                logger.info("Modelo carregado com CPU (fallback)")
+                logger.info("✅ Modelo carregado com CPU (fallback)")
             
             # Configurar modelo
             self.model.conf = self.conf_thresh
@@ -103,7 +111,7 @@ class EPIDetector:
             raise
     
     def _select_device(self):
-        """Seleciona o dispositivo baseado nas configurações"""
+        """Seleciona o dispositivo baseado nas configurações com fallback robusto"""
         if self.force_cpu_only:
             logger.info("Forçando uso de CPU (FORCE_CPU_ONLY=True)")
             return torch.device("cpu")
@@ -113,15 +121,27 @@ class EPIDetector:
             return torch.device("cpu")
         elif self.device_preference == "cuda":
             if torch.cuda.is_available():
-                logger.info("Usando GPU CUDA (preferência do usuário)")
-                return torch.device("cuda")
+                try:
+                    # Testar se CUDA está funcionando
+                    test_tensor = torch.tensor([1.0]).cuda(0)
+                    logger.info("Usando GPU CUDA (preferência do usuário)")
+                    return torch.device("cuda:0")
+                except Exception as e:
+                    logger.warning(f"GPU CUDA solicitada mas com erro: {e}, usando CPU")
+                    return torch.device("cpu")
             else:
                 logger.warning("GPU CUDA solicitada mas não disponível, usando CPU")
                 return torch.device("cpu")
         else:  # auto
             if torch.cuda.is_available():
-                logger.info("Usando GPU CUDA (detecção automática)")
-                return torch.device("cuda")
+                try:
+                    # Testar se CUDA está funcionando
+                    test_tensor = torch.tensor([1.0]).cuda(0)
+                    logger.info("🚀 Usando GPU CUDA:0 (detecção automática) - Performance otimizada!")
+                    return torch.device("cuda:0")
+                except Exception as e:
+                    logger.warning(f"GPU CUDA disponível mas com erro: {e}, usando CPU")
+                    return torch.device("cpu")
             else:
                 logger.info("Usando CPU (CUDA não disponível)")
                 return torch.device("cpu")
