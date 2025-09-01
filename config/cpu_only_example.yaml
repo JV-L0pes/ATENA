@@ -1,13 +1,13 @@
-# Configuração do Sistema de Detecção de EPIs
-# Sistema híbrido: IA + lógica Python para validação
+# Exemplo de configuração para CPU Only
+# Copie este arquivo para config.yaml e ajuste conforme necessário
 
 # Configurações do modelo
 model:
   weights: "yolov5/runs/train/epi_safe_fine_tuned/weights/best.pt"
   conf_threshold: 0.5
   iou_threshold: 0.45
-  device: "auto"  # auto, cpu, cuda
-  force_cpu_only: false  # Força uso de CPU mesmo se GPU estiver disponível
+  device: "cpu"  # Força uso de CPU
+  force_cpu_only: true  # Força CPU mesmo se GPU estiver disponível
 
 # Classes para detecção (baseado no dataset treinado)
 classes:

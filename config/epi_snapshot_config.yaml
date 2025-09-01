@@ -1,0 +1,111 @@
+# Configuração do Sistema de Snapshot Automático para Violações de EPI
+# Sistema que monitora violações e tira snapshots após período de paciência
+
+# Configurações gerais
+patience_period: 3.0  # Segundos de paciência antes de tirar snapshot
+snapshot_dir: "snapshots"  # Diretório para salvar snapshots
+image_quality: 95  # Qualidade da imagem (1-100)
+
+# Configurações de email
+email:
+  enabled: true  # Habilitar notificações por email
+  smtp_server: "smtp.gmail.com"  # Servidor SMTP
+  smtp_port: 587  # Porta SMTP
+  username: "seu_email@gmail.com"  # Seu email
+  password: "sua_senha_app"  # Senha do app (não senha normal)
+  recipients:  # Lista de emails para receber notificações
+    - "supervisor@empresa.com"
+    - "seguranca@empresa.com"
+    - "rh@empresa.com"
+
+# Configurações de WhatsApp
+whatsapp:
+  enabled: false  # Habilitar notificações por WhatsApp
+  api_key: "sua_api_key"  # Chave da API de WhatsApp
+  phone_numbers:  # Lista de números para receber notificações
+    - "+5511999999999"
+    - "+5511888888888"
+
+# Configurações de notificação
+notification:
+  include_timestamp: true  # Incluir timestamp na notificação
+  include_violation_details: true  # Incluir detalhes da violação
+  include_image: true  # Incluir imagem na notificação
+  message_template: "VIOLACAO_DE_EPI"  # Template da mensagem
+
+# Configurações de processamento
+processing:
+  max_snapshots_per_hour: 100  # Máximo de snapshots por hora
+  auto_cleanup_days: 30  # Limpar snapshots antigos após N dias
+  compression_enabled: true  # Comprimir imagens para economizar espaço
+  compression_quality: 85  # Qualidade da compressão
+
+# Configurações de logging
+logging:
+  level: "INFO"  # Nível de log (DEBUG, INFO, WARNING, ERROR)
+  file: "epi_snapshot.log"  # Arquivo de log
+  max_file_size: "10MB"  # Tamanho máximo do arquivo de log
+  backup_count: 5  # Número de backups de log
+
+# Configurações de segurança
+security:
+  encrypt_images: false  # Criptografar imagens salvas
+  watermark_enabled: true  # Adicionar watermark nas imagens
+  watermark_text: "SISTEMA_EPI"  # Texto do watermark
+  access_log: true  # Registrar acesso aos snapshots
+
+# Configurações de backup
+backup:
+  enabled: true  # Habilitar backup automático
+  backup_dir: "backup_snapshots"  # Diretório de backup
+  backup_frequency: "daily"  # Frequência do backup (hourly, daily, weekly)
+  max_backup_size: "1GB"  # Tamanho máximo do backup
+
+# Configurações de integração
+integration:
+  # Integração com sistemas externos
+  external_api_enabled: false  # Habilitar integração com API externa
+  api_endpoint: "https://api.empresa.com/epi_violations"  # Endpoint da API
+  api_key: "sua_chave_api"  # Chave da API externa
+  
+  # Integração com banco de dados
+  database_enabled: false  # Habilitar integração com banco de dados
+  database_type: "postgresql"  # Tipo de banco (postgresql, mysql, sqlite)
+  database_connection: "postgresql://user:pass@localhost/epi_db"  # String de conexão
+
+# Configurações de alertas
+alerts:
+  # Alertas por email
+  email_alerts:
+    immediate: true  # Alerta imediato
+    daily_summary: true  # Resumo diário
+    weekly_report: true  # Relatório semanal
+  
+  # Alertas por WhatsApp
+  whatsapp_alerts:
+    immediate: true  # Alerta imediato
+    daily_summary: false  # Resumo diário
+    critical_only: true  # Apenas violações críticas
+  
+  # Alertas por SMS (se disponível)
+  sms_alerts:
+    enabled: false  # Habilitar alertas por SMS
+    phone_numbers: []  # Números para SMS
+    provider: "twilio"  # Provedor de SMS
+
+# Configurações de personalização
+customization:
+  # Textos personalizados
+  violation_message: "🚨 VIOLAÇÃO DE EPI DETECTADA 🚨"
+  patience_message: "⏰ PERÍODO DE PACIÊNCIA ATIVO"
+  snapshot_message: "📸 SNAPSHOT TIRADO AUTOMATICAMENTE"
+  
+  # Cores personalizadas
+  colors:
+    violation_red: [255, 0, 0]  # Vermelho para violações
+    warning_yellow: [255, 255, 0]  # Amarelo para avisos
+    info_blue: [0, 0, 255]  # Azul para informações
+    success_green: [0, 255, 0]  # Verde para sucesso
+  
+  # Idioma
+  language: "pt_BR"  # Idioma das mensagens (pt_BR, en_US, es_ES)

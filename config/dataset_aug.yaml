@@ -1,0 +1,8 @@
+train: ../datasets_aug/train/images
+val: ../datasets/valid/images
+test: ../datasets/test/images
+
+nc: 5
+names: ['helmet', 'no-helmet', 'no-vest', 'person', 'vest']
+
+

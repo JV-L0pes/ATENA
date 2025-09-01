@@ -1,0 +1,71 @@
+# Configuração Simplificada do Sistema de Detecção de EPIs V3.0
+# Foco: Detecção básica de capacetes e coletes
+
+# Configurações do modelo YOLO
+model:
+  weights: "yolov5/runs/train/epi_detection_v24/weights/best.pt"
+  conf_threshold: 0.35  # Threshold para máxima detecção
+  iou_threshold: 0.45   # IoU para precisão
+  device: "cuda"        # Usar GPU se disponível
+  max_detections: 50    # Máximo de detecções por frame
+  enable_warmup: true   # Warmup do modelo para otimização
+
+# Classes para detecção (baseado no dataset treinado)
+classes:
+  helmet: 0      # Capacete - índice 0 no dataset
+  no-helmet: 1   # Infração de capacete - índice 1 no dataset
+  no-vest: 2     # Infração de colete - índice 2 no dataset
+  person: 3      # Pessoa (âncora principal) - índice 3 no dataset
+  vest: 4        # Colete - índice 4 no dataset
+
+# Configurações de performance
+performance:
+  max_detections: 50             # Máximo de detecções por frame
+  batch_size: 1                  # Tamanho do batch para inferência
+  frame_skip: 1                  # Processar todos os frames
+  enable_async: true             # Processamento assíncrono
+
+  # Otimizações de GPU
+  gpu_memory_fraction: 0.8       # Fração de memória GPU a usar
+  enable_tensorrt: false         # Habilitar TensorRT se disponível
+  enable_fp16: true              # Habilitar precisão FP16 para velocidade
+
+# Cores para visualização
+visualization:
+  colors:
+    person: [255, 255, 0]        # Amarelo para pessoa
+    helmet: [0, 255, 0]          # Verde para capacete
+    vest: [0, 255, 0]            # Verde para colete
+    no_helmet: [0, 0, 255]       # Vermelho para ausência de capacete
+    no_vest: [0, 0, 255]         # Vermelho para ausência de colete
+
+  line_thickness: 2
+  font_scale: 0.6
+  label_offset: 10
+  show_confidence: true          # Mostrar confiança nas labels
+
+# Configurações de logging
+logging:
+  level: "INFO"
+  file: "epi_detection.log"
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+  enable_performance_logging: true
+
+# Configurações de ambiente
+environment:
+  construction_site: true        # Ambiente de canteiro de obra
+  lighting_conditions: "mixed"   # Condições de iluminação variadas
+  camera_height: 3.0            # Altura da câmera em metros
+  camera_angle: 15              # Ângulo da câmera em graus
+
+# Configurações de exportação
+export:
+  enable_export: true            # Habilitar exportação de dados
+  export_format: "json"          # Formato de exportação
+  export_interval: 300           # Intervalo de exportação (segundos)
+
+  # Dados a exportar
+  export_data:
+    - "detections"
+    - "stats"
+    - "performance_metrics"

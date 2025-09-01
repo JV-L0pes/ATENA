@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Athena - Dashboard de Detecção de EPIs</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        athena: {
+                            navy: '#0f172a',
+                            deepBlue: '#1e293b',
+                            royalBlue: '#1e40af',
+                            gold: '#d5b481',
+                            lightGold: '#e8d5b7',
+                            cream: '#fef3c7'
+                        }
+                    },
+                    animation: {
+                        'fade-in': 'fadeIn 0.5s ease-in-out',
+                        'slide-up': 'slideUp 0.3s ease-out',
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'bounce-gentle': 'bounceGentle 2s infinite',
+                        'glow': 'glow 2s ease-in-out infinite alternate'
+                    },
+                    keyframes: {
+                        fadeIn: {
+                            '0%': { opacity: '0', transform: 'translateY(10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' }
+                        },
+                        slideUp: {
+                            '0%': { opacity: '0', transform: 'translateY(20px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' }
+                        },
+                        bounceGentle: {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-5px)' }
+                        },
+                        glow: {
+                            '0%': { boxShadow: '0 0 5px rgba(213, 180, 129, 0.5)' },
+                            '100%': { boxShadow: '0 0 20px rgba(213, 180, 129, 0.8)' }
+                        }
+                    },
+                    backdropBlur: {
+                        xs: '2px',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .glass-effect {
+            background: rgba(30, 41, 59, 0.6);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(213, 180, 129, 0.1);
+        }
+        
+        .gradient-border {
+            background: linear-gradient(135deg, #1e40af, #d5b481);
+            padding: 1px;
+            border-radius: 8px;
+        }
+        
+        .gradient-border > div {
+            background: rgba(15, 23, 42, 0.9);
+            border-radius: 7px;
+        }
+        
+        .sidebar-gradient {
+            background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
+        }
+        
+        .card-hover {
+            transition: all 0.2s ease;
+        }
+        
+        .card-hover:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+        }
+        
+        .button-gradient {
+            background: linear-gradient(135deg, #1e40af, #1e3a8a);
+            transition: all 0.2s ease;
+        }
+        
+        .button-gradient:hover {
+            background: linear-gradient(135deg, #1e3a8a, #172554);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(30, 64, 175, 0.2);
+        }
+        
+        .status-indicator {
+            animation: pulse 2s infinite;
+        }
+        
+        .floating-card {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(213, 180, 129, 0.15);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+        }
+        
+
+        
+        .athena-name-gradient {
+            background: linear-gradient(135deg, #d5b481, #e8d5b7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+
+        
+        .sidebar-item {
+            transition: all 0.2s ease;
+            position: relative;
+        }
+        
+        .sidebar-item:hover {
+            background: rgba(30, 64, 175, 0.1);
+            transform: translateX(4px);
+        }
+        
+        .sidebar-item.active {
+            background: linear-gradient(135deg, #1e40af, #d5b481);
+            box-shadow: 0 4px 8px rgba(30, 64, 175, 0.2);
+        }
+        
+        .metric-card {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(213, 180, 129, 0.15);
+            backdrop-filter: blur(10px);
+        }
+        
+        .metric-value {
+            background: linear-gradient(135deg, #1e40af, #d5b481);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-weight: 700;
+        }
+        
+        .chart-container {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(213, 180, 129, 0.15);
+            backdrop-filter: blur(10px);
+        }
+        
+        .table-container {
+            background: rgba(30, 41, 59, 0.6);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(213, 180, 129, 0.15);
+        }
+        
+        .table-header {
+            background: rgba(30, 64, 175, 0.8);
+        }
+        
+        .table-row:hover {
+            background: rgba(30, 64, 175, 0.2);
+            transition: all 0.2s ease;
+        }
+        
+        .form-input {
+            background: rgba(30, 64, 175, 0.6);
+            border: 1px solid rgba(213, 180, 129, 0.2);
+            backdrop-filter: blur(5px);
+            transition: all 0.2s ease;
+        }
+        
+        .form-input:focus {
+            border-color: #d5b481;
+            box-shadow: 0 0 0 2px rgba(213, 180, 129, 0.1);
+            background: rgba(30, 64, 175, 0.8);
+        }
+        
+        .range-slider {
+            background: linear-gradient(90deg, #1e40af 0%, #d5b481 100%);
+            height: 4px;
+            border-radius: 2px;
+            outline: none;
+        }
+        
+        .range-slider::-webkit-slider-thumb {
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            background: #1e40af;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        
+        .snapshot-button {
+            background: linear-gradient(135deg, #d5b481, #c4a373);
+            transition: all 0.2s ease;
+            position: relative;
+        }
+        
+        .snapshot-button:hover {
+            transform: translateY(-2px) scale(1.02);
+            box-shadow: 0 8px 16px rgba(213, 180, 129, 0.3);
+        }
+        
+        .connection-status {
+            position: relative;
+        }
+        
+        .connection-status.connected::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 6px;
+            height: 6px;
+            background: #d5b481;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        .video-container {
+            background: linear-gradient(135deg, #000000, #1a1a1a);
+            border: 1px solid rgba(30, 64, 175, 0.2);
+            box-shadow: 0 4px 12px rgba(30, 64, 175, 0.1);
+        }
+        
+        .loading-spinner {
+            background: conic-gradient(from 0deg, transparent, #d5b481, transparent);
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Cores monocromáticas ATHENA para todos os elementos */
+        .athena-bg-primary { background-color: #1e40af; }
+        .athena-bg-secondary { background-color: #d5b481; }
+        .athena-bg-accent { background-color: #e8d5b7; }
+        .athena-bg-light { background-color: #fef3c7; }
+        .athena-bg-dark { background-color: #0f172a; }
+        .athena-bg-deep { background-color: #1e293b; }
+        
+        .athena-text-primary { color: #1e40af; }
+        .athena-text-secondary { color: #d5b481; }
+        .athena-text-accent { color: #e8d5b7; }
+        .athena-text-light { color: #fef3c7; }
+        .athena-text-dark { color: #0f172a; }
+        
+        .athena-border-primary { border-color: #1e40af; }
+        .athena-border-secondary { border-color: #d5b481; }
+        .athena-border-accent { border-color: #e8d5b7; }
+        .athena-border-light { border-color: #fef3c7; }
+        
+        /* Gradientes monocromáticos suaves */
+        .athena-gradient-primary { background: linear-gradient(135deg, #1e40af, #1e3a8a); }
+        .athena-gradient-secondary { background: linear-gradient(135deg, #d5b481, #c4a373); }
+        .athena-gradient-accent { background: linear-gradient(135deg, #e8d5b7, #d5b481); }
+        .athena-gradient-mixed { background: linear-gradient(135deg, #1e40af, #d5b481); }
+        
+        /* Hover states monocromáticos suaves */
+        .athena-hover-primary:hover { background-color: #1e3a8a; }
+        .athena-hover-secondary:hover { background-color: #c4a373; }
+        .athena-hover-accent:hover { background-color: #d5b481; }
+        
+        /* Status colors monocromáticos */
+        .athena-success { background-color: #d5b481; }
+        .athena-warning { background-color: #e8d5b7; }
+        .athena-error { background-color: #c4a373; }
+        .athena-info { background-color: #1e40af; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-athena-navy via-athena-deepBlue to-athena-royalBlue min-h-screen">
+    <div x-data="athenaApp" class="flex h-screen">
+        <!-- Sidebar com gradiente ATHENA suave -->
+        <aside class="sidebar-gradient w-80 flex flex-col shadow-lg">
+            <!-- Logo/Header da sidebar com design elegante -->
+            <div class="p-4 border-b border-athena-gold/10">
+                <div class="flex items-center justify-center">
+                    <img src="assets/ATHENA_LOGO.png" alt="ATHENA" class="h-14 w-auto max-w-full">
+                </div>
+            </div>
+
+            <!-- Navegação principal com design limpo -->
+            <nav class="flex-1 p-4 space-y-2">
+                <button @click="navigate('dashboard')" 
+                        :class="view === 'dashboard' ? 'sidebar-item active' : 'sidebar-item'"
+                        class="w-full text-left px-4 py-3 rounded-lg transition-all duration-200 group">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-8 h-8 athena-gradient-secondary rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform">
+                            <i class="fas fa-chart-line text-sm text-athena-cream"></i>
+                        </div>
+                        <div>
+                            <span class="font-medium text-sm text-athena-cream">Dashboard</span>
+                            <p class="text-xs text-athena-cream/60">Visão geral</p>
+                        </div>
+                    </div>
+                </button>
+                
+                <button @click="navigate('relatorio')" 
+                        :class="view === 'relatorio' ? 'sidebar-item active' : 'sidebar-item'"
+                        class="w-full text-left px-4 py-3 rounded-lg transition-all duration-200 group">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-8 h-8 athena-gradient-secondary rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform">
+                            <i class="fas fa-chart-bar text-sm text-athena-cream"></i>
+                        </div>
+                        <div>
+                            <span class="font-medium text-sm text-athena-cream">Relatório</span>
+                            <p class="text-xs text-athena-cream/60">Análises</p>
+                        </div>
+                    </div>
+                </button>
+                
+                <button @click="navigate('historico')" 
+                        :class="view === 'historico' ? 'sidebar-item active' : 'sidebar-item'"
+                        class="w-full text-left px-4 py-3 rounded-lg transition-all duration-200 group">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-8 h-8 athena-gradient-secondary rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform">
+                            <i class="fas fa-history text-sm text-athena-cream"></i>
+                        </div>
+                        <div>
+                            <span class="font-medium text-sm text-athena-cream">Histórico</span>
+                            <p class="text-xs text-athena-cream/60">Registros</p>
+                        </div>
+                    </div>
+                        </button>
+                        
+                <button @click="navigate('status')" 
+                        :class="view === 'status' ? 'sidebar-item active' : 'sidebar-item'"
+                        class="w-full text-left px-4 py-3 rounded-lg transition-all duration-200 group">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-8 h-8 athena-gradient-secondary rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform">
+                            <i class="fas fa-server text-sm text-athena-cream"></i>
+                        </div>
+                        <div>
+                            <span class="font-medium text-sm text-athena-cream">Status</span>
+                            <p class="text-xs text-athena-cream/60">Monitoramento</p>
+                        </div>
+                    </div>
+                        </button>
+                        
+                <button @click="navigate('config')" 
+                        :class="view === 'config' ? 'sidebar-item active' : 'sidebar-item'"
+                        class="w-full text-left px-4 py-3 rounded-lg transition-all duration-200 group">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-8 h-8 athena-gradient-secondary rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform">
+                            <i class="fas fa-cog text-sm text-athena-cream"></i>
+                        </div>
+                        <div>
+                            <span class="font-medium text-sm text-athena-cream">Configurações</span>
+                            <p class="text-xs text-athena-cream/60">Conficgurações do sistema</p>
+                        </div>
+                    </div>
+                </button>
+            </nav>
+
+            <!-- Botão Snapshot com design elegante -->
+            <div class="p-4 border-t border-athena-gold/10">
+                        <button @click="takeSnapshot" 
+                        class="snapshot-button w-16 h-16 mx-auto rounded-full flex items-center justify-center shadow-lg">
+                    <i class="fas fa-camera text-2xl text-athena-cream"></i>
+                </button>
+                <p class="text-center text-xs text-athena-cream/60 mt-2 font-medium">Snapshot</p>
+            </div>
+
+            <!-- Status da conexão com design sutil -->
+            <div class="p-4 border-t border-athena-gold/10">
+                <div class="connection-status" :class="connectionStatus === 'connected' ? 'connected' : ''">
+                    <div class="flex items-center space-x-2">
+                        <div class="w-3 h-3 rounded-full" :class="connectionStatus === 'connected' ? 'athena-success status-indicator' : 'athena-error'"></div>
+                        <div>
+                            <span class="text-xs font-medium text-athena-cream" :text="connectionStatus === 'connected' ? 'Conectado' : 'Desconectado'"></span>
+                            <p class="text-xs text-athena-cream/50">Status</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Conteúdo principal -->
+        <main class="flex-1 flex flex-col bg-gradient-to-br from-athena-navy/50 via-athena-deepBlue/50 to-athena-royalBlue/50">
+            <!-- Header com controles -->
+            <header class="p-6 border-b border-athena-gold/20">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-4">
+                        <h2 class="text-2xl font-bold text-white" x-text="getViewTitle()"></h2>
+                    </div>
+                </div>
+
+                    <div class="flex items-center space-x-3">
+                        <div class="flex items-center space-x-2">
+                            <div class="w-3 h-3 rounded-full" 
+                                 :class="connectionStatus === 'connected' ? 'athena-success' : 'athena-error'"></div>
+                            <span class="text-sm text-athena-cream" 
+                                  x-text="connectionStatus === 'connected' ? 'Sistema Ativo' : 'Sistema Offline'"></span>
+                        </div>
+                        <div class="text-xs text-athena-cream/60" 
+                             x-text="connectionStatus === 'connected' ? `v${systemStatus.api_version || 'N/A'}` : ''"></div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Debug Info -->
+            <div class="p-4 bg-red-500 text-white">
+                <p>Debug: View atual = <span x-text="view"></span></p>
+                <p>Debug: Alpine funcionando = <span x-text="'SIM'"></span></p>
+            </div>
+
+            <!-- Conteúdo dinâmico das views -->
+            <div class="flex-1 p-6 overflow-auto">
+                <!-- Dashboard View -->
+                <div x-show="view === 'dashboard'" class="space-y-6">
+                    <!-- Container do vídeo com design ATHENA -->
+                    <div class="video-container rounded-2xl overflow-hidden">
+                        <div class="relative w-full aspect-video">
+                            <img id="mjpeg" class="w-full h-full object-contain select-none" 
+                                 src="http://localhost:8000/stream.mjpg" alt="Stream de vídeo">
+                            <canvas id="overlay" class="absolute inset-0"></canvas>
+                            
+                            <!-- Overlay de status do vídeo -->
+                            <div x-show="!videoLoaded" class="absolute inset-0 bg-athena-navy/80 flex items-center justify-center">
+                        <div class="text-center">
+                                    <div class="loading-spinner w-16 h-16 rounded-full mx-auto mb-4"></div>
+                                    <p class="text-athena-cream text-lg font-medium">Carregando stream...</p>
+                        </div>
+                        </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Controles do dashboard -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div class="floating-card rounded-xl p-6">
+                            <div class="flex items-center space-x-4">
+                                <div class="w-12 h-12 athena-gradient-primary rounded-xl flex items-center justify-center">
+                                    <i class="fas fa-play text-xl text-athena-cream"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-lg font-semibold text-athena-cream">Status do Stream</h3>
+                                    <p class="text-athena-cream/60" x-text="videoLoaded ? 'Ativo' : 'Carregando...'"></p>
+                                    <p class="text-xs text-athena-cream/40" x-text="videoLoaded ? `FPS: ${systemStatus.fps || 'N/A'}` : ''"></p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="floating-card rounded-xl p-6">
+                            <div class="flex items-center space-x-4">
+                                <div class="w-12 h-12 athena-gradient-primary rounded-xl flex items-center justify-center">
+                                    <i class="fas fa-eye text-xl text-athena-cream"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-lg font-semibold text-athena-cream">Detecções</h3>
+                                    <p class="text-athena-cream/60" x-text="isDetectionRunning ? 'Ativo' : 'Inativo'"></p>
+                                    <p class="text-xs text-athena-cream/40" x-text="`Total: ${stats.total_pessoas || 0}`"></p>
+                                </div>
+                            </div>
+                        </div>
+                    
+                        <div class="floating-card rounded-xl p-6">
+                            <div class="flex items-center space-x-4">
+                                <div class="w-12 h-12 athena-gradient-primary rounded-xl flex items-center justify-center">
+                                    <i class="fas fa-signal text-xl text-athena-cream"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-lg font-semibold text-athena-cream">Conexão</h3>
+                                    <p class="text-athena-cream/60" x-text="connectionStatus === 'connected' ? 'Conectado' : 'Desconectado'"></p>
+                                    <p class="text-xs text-athena-cream/40" x-text="connectionStatus === 'connected' ? `API: ${systemStatus.api_version || 'N/A'}` : 'Verificando...'"></p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Relatório View -->
+                <div x-show="view === 'relatorio'" class="space-y-6">
+                    <div class="floating-card rounded-xl p-6">
+                        <h3 class="text-2xl font-bold text-athena-cream mb-6">Relatório de Detecções</h3>
+                        
+                        <!-- Filtros -->
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                            <div>
+                                <label class="block text-sm font-medium text-athena-cream/80 mb-2">Período</label>
+                                <select class="form-input w-full px-4 py-2 rounded-lg text-athena-cream">
+                                    <option>Últimas 24h</option>
+                                    <option>Última semana</option>
+                                    <option>Último mês</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-athena-cream/80 mb-2">Tipo de EPI</label>
+                                <select class="form-input w-full px-4 py-2 rounded-lg text-athena-cream">
+                                    <option>Todos</option>
+                                    <option>Apenas Capacete</option>
+                                    <option>Apenas Colete</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-athena-cream/80 mb-2">Status</label>
+                                <select class="form-input w-full px-4 py-2 rounded-lg text-athena-cream">
+                                    <option>Todos</option>
+                                    <option>Com EPI</option>
+                                    <option>Sem EPI</option>
+                                </select>
+                            </div>
+                            <div class="flex items-end">
+                                <button class="athena-gradient-primary px-6 py-2 rounded-lg text-athena-cream font-medium hover:scale-105 transition-transform">
+                                    <i class="fas fa-search mr-2"></i>Filtrar
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Gráfico Chart.js -->
+                        <div class="chart-container rounded-xl p-6">
+                            <h4 class="text-lg font-semibold text-athena-cream mb-4">Estatísticas de Detecção</h4>
+                            <div class="h-80 w-full">
+                                <canvas id="reportChart"></canvas>
+                            </div>
+                        </div>
+                        
+                        <!-- Métricas resumidas -->
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mt-6">
+                            <div class="metric-card rounded-xl p-6 text-center">
+                                <div class="w-16 h-16 athena-gradient-primary rounded-full flex items-center justify-center mx-auto mb-4">
+                                    <i class="fas fa-hard-hat text-2xl text-athena-cream"></i>
+                                </div>
+                                <h5 class="text-lg font-semibold text-athena-cream mb-2">Com Capacete</h5>
+                                <p class="metric-value text-3xl font-bold" x-text="stats.com_capacete || 0"></p>
+                            </div>
+                            
+                            <div class="metric-card rounded-xl p-6 text-center">
+                                <div class="w-16 h-16 athena-gradient-primary rounded-full flex items-center justify-center mx-auto mb-4">
+                                    <i class="fas fa-user text-2xl text-athena-cream"></i>
+                                </div>
+                                <h5 class="text-lg font-semibold text-athena-cream mb-2">Sem Capacete</h5>
+                                <p class="metric-value text-3xl font-bold" x-text="stats.sem_capacete || 0"></p>
+                            </div>
+                            
+                            <div class="metric-card rounded-xl p-6 text-center">
+                                <div class="w-16 h-16 athena-gradient-primary rounded-full flex items-center justify-center mx-auto mb-4">
+                                    <i class="fas fa-tshirt text-2xl text-athena-cream"></i>
+                                </div>
+                                <h5 class="text-lg font-semibold text-athena-cream mb-2">Com Colete</h5>
+                                <p class="metric-value text-3xl font-bold" x-text="stats.com_colete || 0"></p>
+                            </div>
+                            
+                            <div class="metric-card rounded-xl p-6 text-center">
+                                <div class="w-16 h-16 athena-gradient-primary rounded-full flex items-center justify-center mx-auto mb-4">
+                                    <i class="fas fa-user-times text-2xl text-athena-cream"></i>
+                                </div>
+                                <h5 class="text-lg font-semibold text-athena-cream mb-2">Sem Colete</h5>
+                                <p class="metric-value text-3xl font-bold" x-text="stats.sem_colete || 0"></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Histórico View -->
+                <div x-show="view === 'historico'" class="space-y-6">
+                    <div class="floating-card rounded-xl p-6">
+                        <h3 class="text-2xl font-bold text-athena-cream mb-6">Histórico de Detecções</h3>
+                        
+                        <!-- Filtros de histórico -->
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                            <div>
+                                <label class="block text-sm font-medium text-athena-cream/80 mb-2">Data Inicial</label>
+                                <input type="date" class="form-input w-full px-4 py-2 rounded-lg text-athena-cream">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-athena-cream/80 mb-2">Data Final</label>
+                                <input type="date" class="form-input w-full px-4 py-2 rounded-lg text-athena-cream">
+                            </div>
+                            <div class="flex items-end">
+                                <button class="athena-gradient-primary px-6 py-2 rounded-lg text-athena-cream font-medium hover:scale-105 transition-transform">
+                                    <i class="fas fa-search mr-2"></i>Buscar
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Tabela de histórico -->
+                        <div class="table-container rounded-xl overflow-hidden">
+                            <table class="w-full">
+                                <thead class="table-header">
+                                    <tr>
+                                        <th class="px-6 py-4 text-left text-athena-cream font-semibold">Data/Hora</th>
+                                        <th class="px-6 py-4 text-left text-athena-cream font-semibold">EPI Status</th>
+                                        <th class="px-6 py-4 text-left text-athena-cream font-semibold">Confiança</th>
+                                        <th class="px-6 py-4 text-left text-athena-cream font-semibold">Ações</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-athena-gold/20">
+                                    <template x-for="item in history" :key="item.id">
+                                        <tr class="table-row">
+                                            <td class="px-6 py-4 text-athena-cream/80" x-text="formatDateTime(item.timestamp)"></td>
+                                            <td class="px-6 py-4">
+                                                <span class="px-3 py-1 rounded-full text-xs font-medium" 
+                                                      :class="item.epi_status === 'complete' ? 'athena-success text-athena-cream' : 
+                                                             item.epi_status === 'partial' ? 'athena-warning text-athena-cream' : 
+                                                             'athena-error text-athena-cream'"
+                                                      x-text="item.epi_status === 'complete' ? 'EPI Completo' : 
+                                                             item.epi_status === 'partial' ? 'EPI Parcial' : 
+                                                             'Sem EPI'"></span>
+                                            </td>
+                                            <td class="px-6 py-4 text-athena-cream/80" x-text="formatPercentage(item.confidence)"></td>
+                                            <td class="px-6 py-4">
+                                                <button class="athena-gradient-primary px-3 py-1 rounded-lg text-athena-cream text-sm hover:scale-105 transition-transform">
+                                                    <i class="fas fa-eye mr-1"></i>Ver
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <!-- Paginação -->
+                        <div class="flex items-center justify-between mt-6">
+                            <div class="text-sm text-athena-cream/60">
+                                Mostrando <span x-text="filters.offset + 1"></span> a <span x-text="Math.min(filters.offset + filters.limit, history.length)"></span> de <span x-text="history.length"></span> registros
+                            </div>
+                            <div class="flex space-x-2">
+                                <button @click="loadHistory(filters.offset - filters.limit)" 
+                                        :disabled="filters.offset <= 0"
+                                        class="px-4 py-2 rounded-lg text-athena-cream font-medium transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        :class="filters.offset <= 0 ? 'athena-bg-deep' : 'athena-gradient-primary hover:scale-105'">
+                                    <i class="fas fa-chevron-left mr-2"></i>Anterior
+                                </button>
+                                <button @click="loadHistory(filters.offset + filters.limit)" 
+                                        :disabled="filters.offset + filters.limit >= history.length"
+                                        class="px-4 py-2 rounded-lg text-athena-cream font-medium transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        :class="filters.offset + filters.limit >= history.length ? 'athena-bg-deep' : 'athena-gradient-primary hover:scale-105'">
+                                    Próximo<i class="fas fa-chevron-right ml-2"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Status View -->
+                <div x-show="view === 'status'" x-transition:enter="animate-fade-in" class="space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <!-- Status do Sistema -->
+                        <div class="floating-card rounded-xl p-6">
+                            <div class="flex items-center space-x-4 mb-4">
+                                <div class="w-12 h-12 athena-gradient-primary rounded-xl flex items-center justify-center">
+                                    <i class="fas fa-server text-xl text-athena-cream"></i>
+                                </div>
+                                <h3 class="text-xl font-semibold text-athena-cream">Status do Sistema</h3>
+                            </div>
+                            <div class="space-y-3">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-athena-cream/80">Status:</span>
+                                    <span class="px-3 py-1 rounded-full text-sm font-medium" 
+                                          :class="systemStatus.status === 'online' ? 'athena-success text-athena-cream' : 'athena-error text-athena-cream'"
+                                          x-text="systemStatus.status === 'online' ? 'Online' : 'Offline'"></span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-athena-cream/80">Uptime:</span>
+                                    <span class="text-athena-cream font-medium" x-text="formatDuration(systemStatus.uptime_s || 0)"></span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-athena-cream/80">Versão:</span>
+                                    <span class="text-athena-cream font-medium" x-text="systemStatus.version || 'N/A'"></span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-athena-cream/80">Última Atualização:</span>
+                                    <span class="text-athena-cream font-medium" x-text="formatDateTime(systemStatus.last_update)"></span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Conexões -->
+                        <div class="floating-card rounded-xl p-6">
+                            <div class="flex items-center space-x-4 mb-4">
+                                <div class="w-12 h-12 athena-gradient-primary rounded-xl flex items-center justify-center">
+                                    <i class="fas fa-network-wired text-xl text-athena-cream"></i>
+                                </div>
+                                <h3 class="text-xl font-semibold text-athena-cream">Conexões</h3>
+                            </div>
+                            <div class="space-y-3">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-athena-cream/80">API:</span>
+                                    <span class="px-3 py-1 rounded-full text-sm font-medium" 
+                                          :class="connectionStatus === 'connected' ? 'athena-success text-athena-cream' : 'athena-error text-athena-cream'"
+                                          x-text="connectionStatus === 'connected' ? 'Ativa' : 'Inativa'"></span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-athena-cream/80">Stream:</span>
+                                    <span class="px-3 py-1 rounded-full text-sm font-medium" 
+                                          :class="videoLoaded ? 'athena-success text-athena-cream' : 'athena-error text-athena-cream'"
+                                          x-text="videoLoaded ? 'Ativo' : 'Inativo'"></span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-athena-cream/80">Detecções:</span>
+                                    <span class="px-3 py-1 rounded-full text-sm font-medium" 
+                                          :class="isDetectionRunning ? 'athena-success text-athena-cream' : 'athena-error text-athena-cream'"
+                                          x-text="isDetectionRunning ? 'Ativo' : 'Inativo'"></span>
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-athena-cream/80">Modelo:</span>
+                                    <span class="px-3 py-1 rounded-full text-sm font-medium" 
+                                          :class="systemStatus.model_loaded ? 'athena-success text-athena-cream' : 'athena-error text-athena-cream'"
+                                          x-text="systemStatus.model_loaded ? 'Carregado' : 'Não Carregado'"></span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Logs do Sistema -->
+                        <div class="floating-card rounded-xl p-6 md:col-span-2">
+                            <div class="flex items-center space-x-4 mb-4">
+                                <div class="w-12 h-12 athena-gradient-primary rounded-xl flex items-center justify-center">
+                                    <i class="fas fa-file-alt text-xl text-athena-cream"></i>
+                                </div>
+                                <h3 class="text-xl font-semibold text-athena-cream">Logs do Sistema</h3>
+                                <button @click="refreshLogs" class="ml-auto px-3 py-1 athena-gradient-secondary rounded-lg text-athena-cream text-sm hover:scale-105 transition-transform">
+                                    <i class="fas fa-sync-alt mr-1"></i>Atualizar
+                                </button>
+                            </div>
+                            <div class="bg-athena-navy/50 rounded-lg p-4 h-48 overflow-y-auto">
+                                <div x-show="systemLogs.length === 0" class="text-center text-athena-cream/60 py-8">
+                                    <i class="fas fa-info-circle text-2xl mb-2"></i>
+                                    <p>Nenhum log disponível</p>
+                                </div>
+                                <template x-for="log in systemLogs" :key="log.id">
+                                    <div class="flex items-center space-x-2 text-sm mb-2">
+                                        <span class="px-2 py-1 rounded text-xs font-medium" 
+                                              :class="log.level === 'INFO' ? 'athena-success text-athena-cream' : 
+                                                     log.level === 'WARNING' ? 'athena-warning text-athena-cream' : 
+                                                     'athena-error text-athena-cream'"
+                                              x-text="log.level"></span>
+                                        <span class="text-athena-cream" x-text="log.message"></span>
+                                        <span class="text-athena-cream/60 ml-auto" x-text="formatDateTime(log.timestamp)"></span>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Config View -->
+                <div x-show="view === 'config'" x-transition:enter="animate-fade-in" class="space-y-6">
+                    <div class="floating-card rounded-xl p-6">
+                        <h3 class="text-2xl font-bold text-athena-cream mb-6">Configurações do Sistema</h3>
+                        
+                        <form @submit.prevent="saveConfig" class="space-y-6">
+                            <!-- Configurações do Modelo de IA -->
+                            <div class="space-y-4">
+                                <h4 class="text-lg font-semibold text-athena-cream border-b border-athena-gold/20 pb-2">Parâmetros do Modelo de IA</h4>
+                                
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label class="block text-sm font-medium text-athena-cream/80 mb-2">Threshold de Confiança</label>
+                                        <div class="space-y-2">
+                                            <input type="range" min="0.1" max="1.0" step="0.05" 
+                                                   x-model="config.conf_thresh" 
+                                                   class="range-slider w-full">
+                                            <div class="flex justify-between text-sm text-athena-cream/60">
+                                                <span>0.1</span>
+                                                <span class="text-athena-cream font-medium" x-text="config.conf_thresh"></span>
+                                                <span>1.0</span>
+                                            </div>
+                                            <p class="text-xs text-athena-cream/50">Detecções abaixo deste valor serão ignoradas</p>
+                                        </div>
+                                    </div>
+                                            
+                                    <div>
+                                        <label class="block text-sm font-medium text-athena-cream/80 mb-2">IOU Threshold</label>
+                                        <div class="space-y-2">
+                                            <input type="range" min="0.1" max="1.0" step="0.05" 
+                                                   x-model="config.iou" 
+                                                   class="range-slider w-full">
+                                            <div class="flex justify-between text-sm text-athena-cream/60">
+                                                <span>0.1</span>
+                                                <span class="text-athena-cream font-medium" x-text="config.iou"></span>
+                                                <span>1.0</span>
+                                            </div>
+                                            <p class="text-xs text-athena-cream/50">Elimina detecções duplicadas sobrepostas</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label class="block text-sm font-medium text-athena-cream/80 mb-2">Tamanho do Batch</label>
+                                        <select x-model="config.batch_size" class="form-input w-full px-4 py-2 rounded-lg text-athena-cream">
+                                            <option value="1">1 frame</option>
+                                            <option value="4">4 frames</option>
+                                            <option value="8">8 frames</option>
+                                            <option value="16">16 frames</option>
+                                        </select>
+                                        <p class="text-xs text-athena-cream/50 mt-1">Processamento em lote para melhor performance</p>
+                                    </div>
+                                            
+                                    <div>
+                                        <label class="block text-sm font-medium text-athena-cream/80 mb-2">Tamanho da Imagem</label>
+                                        <select x-model="config.img_size" class="form-input w-full px-4 py-2 rounded-lg text-athena-cream">
+                                            <option value="640">640x640</option>
+                                            <option value="832">832x832</option>
+                                            <option value="1024">1024x1024</option>
+                                        </select>
+                                        <p class="text-xs text-athena-cream/50 mt-1">Resolução para processamento do modelo</p>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Configurações de Performance -->
+                            <div class="space-y-4">
+                                <h4 class="text-lg font-semibold text-athena-cream border-b border-athena-gold/20 pb-2">Configurações de Performance</h4>
+                                
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label class="block text-sm font-medium text-athena-cream/80 mb-2">Dispositivo de Processamento</label>
+                                        <select x-model="config.device_preference" class="form-input w-full px-4 py-2 rounded-lg text-athena-cream">
+                                            <option value="auto">Automático (GPU se disponível)</option>
+                                            <option value="cuda">GPU (CUDA)</option>
+                                            <option value="cpu">CPU Apenas</option>
+                                        </select>
+                                        <p class="text-xs text-athena-cream/50 mt-1">Escolha o dispositivo para processamento de IA</p>
+                                    </div>
+                                    
+                                    <div>
+                                        <label class="block text-sm font-medium text-athena-cream/80 mb-2">Forçar CPU</label>
+                                        <div class="flex items-center space-x-3">
+                                            <input type="checkbox" x-model="config.force_cpu_only" 
+                                                   class="w-4 h-4 text-athena-gold bg-athena-navy border-athena-gold rounded focus:ring-athena-gold focus:ring-2">
+                                            <span class="text-athena-cream text-sm">Forçar uso de CPU mesmo com GPU disponível</span>
+                                        </div>
+                                        <p class="text-xs text-athena-cream/50 mt-1">Útil para sistemas com GPU limitada</p>
+                                    </div>
+                                </div>
+                                
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <label class="block text-sm font-medium text-athena-cream/80 mb-2">FPS</label>
+                                        <div class="px-4 py-2 bg-athena-navy/30 rounded-lg border border-athena-gold/20">
+                                            <span class="text-athena-cream font-medium">Automático</span>
+                                            <p class="text-xs text-athena-cream/50 mt-1">Adapta-se à capacidade da câmera</p>
+                                        </div>
+                                    </div>
+                                            
+                                    <div>
+                                        <label class="block text-sm font-medium text-athena-cream/80 mb-2">Qualidade da Câmera</label>
+                                        <div class="px-4 py-2 bg-athena-navy/30 rounded-lg border border-athena-gold/20">
+                                            <span class="text-athena-cream font-medium">Automática</span>
+                                            <p class="text-xs text-athena-cream/50 mt-1">Usa resolução nativa da câmera</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            
+                    
+                            <!-- Botões de ação -->
+                            <div class="flex items-center justify-end space-x-4 pt-6 border-t border-athena-gold/20">
+                                <button type="button" @click="loadConfig" 
+                                        class="px-6 py-3 athena-gradient-secondary rounded-lg text-athena-cream font-medium hover:scale-105 transition-transform">
+                                    <i class="fas fa-undo mr-2"></i>Restaurar Padrão
+                        </button>
+                                <button type="submit" 
+                                        class="px-6 py-3 athena-gradient-primary rounded-lg text-athena-cream font-medium hover:scale-105 transition-transform">
+                                    <i class="fas fa-save mr-2"></i>Salvar Configurações
+                        </button>
+                    </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="js/config.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/detection.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
