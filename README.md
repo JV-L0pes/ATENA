@@ -64,7 +64,7 @@ http://localhost:8000
 
 ```bash
 # Modelo
-MODEL_PATH=yolov5/runs/train/epi_detection_balanced_long_distance4/weights/best.pt
+MODEL_PATH=athena_training_2phase_optimized/models/phase1_complete/athena_phase1_tesla_t4/weights/best.pt
 
 # API
 API_HOST=0.0.0.0
@@ -112,10 +112,11 @@ Atena/
 O sistema automaticamente detecta e usa o melhor modelo disponível em `yolov5/runs/train/`.
 
 ### Modelo Atual
-- **Nome**: `epi_detection_balanced_long_distance4`
+- **Nome**: `athena_phase1_tesla_t4` (Fase 1 Otimizado)
 - **Arquivo**: `best.pt`
-- **Tamanho**: ~3.7MB
-- **Classes**: person, helmet, vest
+- **Tamanho**: ~14MB
+- **Classes**: 17 classes de EPIs + person
+- **Performance**: 99.58% taxa de detecção, 84.18% confiança média
 
 ## 🌐 Endpoints da API
 
@@ -166,7 +167,7 @@ python -c "import cv2; cap = cv2.VideoCapture(0); print(cap.isOpened())"
 #### 2. Modelo não carrega
 ```bash
 # Verifique se o arquivo existe
-ls -la yolov5/runs/train/*/weights/best.pt
+ls -la athena_training_2phase_optimized/models/phase1_complete/athena_phase1_tesla_t4/weights/best.pt
 ```
 
 #### 3. Frontend não conecta

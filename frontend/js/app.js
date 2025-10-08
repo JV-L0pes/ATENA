@@ -493,10 +493,19 @@ document.addEventListener('alpine:init', () => {
                 const response = await fetch(`/history?${params.toString()}`);
                 const data = await response.json();
                 
-                this.history = data.data || [];
+                // Garantir que history seja sempre um array válido
+                this.history = Array.isArray(data.data) ? data.data : [];
+                
+                // Adicionar IDs únicos se não existirem
+                this.history = this.history.map((item, index) => ({
+                    ...item,
+                    id: item.id || `history_${index}_${Date.now()}`
+                }));
                 
     } catch (error) {
                 console.error('Erro ao carregar histórico:', error);
+                // Garantir que history seja sempre um array mesmo em caso de erro
+                this.history = [];
                 console.error('Erro ao carregar histórico');
             }
         },

@@ -13,17 +13,35 @@ import cv2
 import numpy as np
 
 def setup_logging(level: str = "INFO", format_str: str = None) -> logging.Logger:
-    """Configura logging padrão"""
+    """Configura logging padrão com suporte a Unicode"""
+    import sys
+    import io
+    
+    # Configurar stdout para UTF-8 no Windows
+    if sys.platform == "win32":
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    
     if format_str is None:
         format_str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     
+    # Criar handler para console com UTF-8
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(getattr(logging, level.upper()))
+    
+    # Criar handler para arquivo com UTF-8
+    file_handler = logging.FileHandler("athena_backend.log", encoding='utf-8')
+    file_handler.setLevel(getattr(logging, level.upper()))
+    
+    # Formato das mensagens
+    formatter = logging.Formatter(format_str)
+    console_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+    
+    # Configurar logging
     logging.basicConfig(
         level=getattr(logging, level.upper()),
-        format=format_str,
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler("athena_backend.log")
-        ]
+        handlers=[console_handler, file_handler]
     )
     
     return logging.getLogger(__name__)
@@ -163,12 +181,32 @@ def resize_frame(frame: np.ndarray, target_width: int, target_height: int) -> np
 
 def encode_frame_jpeg(frame: np.ndarray, quality: int = 95) -> bytes:
     """Codifica frame para JPEG"""
-    if frame is None:
+    try:
+        if frame is None:
+            return b""
+        
+        # Verificar se o frame é válido
+        if not isinstance(frame, np.ndarray) or frame.size == 0:
+            logging.warning("Frame inválido para codificação JPEG")
+            return b""
+        
+        # Verificar dimensões do frame
+        if len(frame.shape) != 3 or frame.shape[2] != 3:
+            logging.warning(f"Frame com formato inválido: {frame.shape}")
+            return b""
+        
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+        success, buffer = cv2.imencode('.jpg', frame, encode_params)
+        
+        if not success:
+            logging.error("Falha ao codificar frame para JPEG")
+            return b""
+        
+        return buffer.tobytes()
+        
+    except Exception as e:
+        logging.error(f"Erro ao codificar frame JPEG: {e}")
         return b""
-    
-    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
-    _, buffer = cv2.imencode('.jpg', frame, encode_params)
-    return buffer.tobytes()
 
 def save_frame_as_image(frame: np.ndarray, filepath: Path, quality: int = 95) -> bool:
     """Salva frame como imagem"""

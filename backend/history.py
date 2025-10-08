@@ -43,6 +43,26 @@ class DetectionRecord:
         except Exception:
             return False
     
+    def _get_violations(self) -> List[str]:
+        """Retorna lista de violações para este registro"""
+        violations = []
+        
+        try:
+            without_helmet = self.epi_summary.get("sem_capacete", 0)
+            without_vest = self.epi_summary.get("sem_colete", 0)
+            
+            if without_helmet > 0 and without_vest > 0:
+                violations.append("Sem capacete e sem colete")
+            elif without_helmet > 0:
+                violations.append("Sem capacete")
+            elif without_vest > 0:
+                violations.append("Sem colete")
+                
+        except Exception:
+            pass
+        
+        return violations
+    
     def to_dict(self) -> Dict[str, Any]:
         """Converte para dicionário"""
         return {
@@ -418,13 +438,19 @@ class EPIHistorySystem:
         """Retorna lista de violações para um registro"""
         violations = []
         
-        if record.compliance_status == "violation":
-            violations.append("Sem capacete e sem colete")
-        elif record.compliance_status == "partial":
-            if record.epi_summary.get("sem_capacete", 0) > 0:
+        try:
+            without_helmet = record.epi_summary.get("sem_capacete", 0)
+            without_vest = record.epi_summary.get("sem_colete", 0)
+            
+            if without_helmet > 0 and without_vest > 0:
+                violations.append("Sem capacete e sem colete")
+            elif without_helmet > 0:
                 violations.append("Sem capacete")
-            if record.epi_summary.get("sem_colete", 0) > 0:
+            elif without_vest > 0:
                 violations.append("Sem colete")
+                
+        except Exception:
+            pass
         
         return violations
     

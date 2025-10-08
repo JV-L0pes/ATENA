@@ -12,12 +12,12 @@ class BackendConfig:
     
     # Configurações da API
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
-    API_PORT = int(os.getenv("API_PORT", "8000"))
+    API_PORT = int(os.getenv("API_PORT", "3000"))
     API_RELOAD = os.getenv("API_RELOAD", "false").lower() == "true"
     
-    # Configurações do modelo YOLOv5 - Usando o melhor modelo treinado
-    MODEL_PATH = os.getenv("MODEL_PATH", "yolov5/runs/train/epi_safe_fine_tuned/weights/best.pt")
-    MODEL_CONF_THRESH = float(os.getenv("MODEL_CONF_THRESH", "0.35"))
+    # Configurações do modelo - Usando o melhor modelo treinado da Fase 1
+    MODEL_PATH = os.getenv("MODEL_PATH", "athena_training_2phase_optimized/models/phase1_complete/athena_phase1_tesla_t4/weights/best.pt")
+    MODEL_CONF_THRESH = float(os.getenv("MODEL_CONF_THRESH", "0.25"))
     MODEL_IOU_THRESH = float(os.getenv("MODEL_IOU_THRESH", "0.45"))
     MODEL_MAX_DETECTIONS = int(os.getenv("MODEL_MAX_DETECTIONS", "50"))
     
@@ -25,8 +25,10 @@ class BackendConfig:
     FORCE_CPU_ONLY = os.getenv("FORCE_CPU_ONLY", "false").lower() == "true"  # Padrão GPU com fallback
     DEVICE_PREFERENCE = os.getenv("DEVICE_PREFERENCE", "auto")  # Padrão auto (GPU se disponível, senão CPU)
     
-    # Configurações de vídeo
-    VIDEO_SOURCE = int(os.getenv("VIDEO_SOURCE", "0"))
+    # Configurações de vídeo - Suporte para HTTP via Tailscale
+    VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "0")  # Padrão: webcam local
+    VIDEO_TYPE = os.getenv("VIDEO_TYPE", "usb")  # usb, ip, rtsp, udp, http
+    RTSP_URL = os.getenv("RTSP_URL", "http://100.67.254.55:8554/webcam")  # HTTP stream do PC local
     VIDEO_FPS = int(os.getenv("VIDEO_FPS", "30"))
     VIDEO_WIDTH = int(os.getenv("VIDEO_WIDTH", "640"))
     VIDEO_HEIGHT = int(os.getenv("VIDEO_HEIGHT", "480"))
