@@ -1,0 +1,198 @@
+/* Athena Dashboard - Estilos Customizados */
+
+/* Cores do tema Athena */
+:root {
+    --athena-navy: #1a1d29;
+    --athena-gold: #d6b37e;
+    --athena-cream: #f5f5dc;
+    --athena-dark: #0f1115;
+}
+
+/* Corrigir overflow e espaços extras */
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    height: 100%;
+}
+
+body > div {
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* Garantir que a sidebar tenha altura completa */
+aside {
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Compactar conteúdo da sidebar */
+aside .p-6 {
+    padding: 1rem;
+}
+
+aside .p-4 {
+    padding: 0.75rem;
+}
+
+aside nav {
+    padding: 0.75rem;
+}
+
+aside .space-y-2 > * + * {
+    margin-top: 0.25rem;
+}
+
+/* Garantir que o conteúdo da sidebar seja exibido completamente */
+aside > div:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0.5rem;
+}
+
+/* Customizar scrollbar para combinar com o tema Athena */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(26, 29, 41, 0.3);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #d6b37e 0%, #b8941f 100%);
+    border-radius: 4px;
+    border: 1px solid rgba(214, 179, 126, 0.2);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #e8d5b7 0%, #d6b37e 100%);
+    border-color: rgba(214, 179, 126, 0.4);
+}
+
+::-webkit-scrollbar-corner {
+    background: rgba(26, 29, 41, 0.3);
+}
+
+/* Scrollbar para Firefox */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #d6b37e rgba(26, 29, 41, 0.3);
+}
+
+/* Scrollbar para área de conteúdo principal */
+.overflow-auto::-webkit-scrollbar {
+    width: 10px;
+}
+
+.overflow-auto::-webkit-scrollbar-track {
+    background: rgba(26, 29, 41, 0.2);
+    border-radius: 5px;
+}
+
+.overflow-auto::-webkit-scrollbar-thumb {
+    background: linear-gradient(135deg, #d6b37e 0%, #b8941f 100%);
+    border-radius: 5px;
+    border: 2px solid rgba(214, 179, 126, 0.2);
+}
+
+.overflow-auto::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(135deg, #e8d5b7 0%, #d6b37e 100%);
+    border-color: rgba(214, 179, 126, 0.4);
+}
+
+/* Estilos para notificações toast */
+.toast-notification {
+    animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* Estilos para loading spinner */
+.loading-spinner {
+    border: 4px solid rgba(214, 179, 126, 0.3);
+    border-top: 4px solid #d6b37e;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Estilos para cards flutuantes */
+.floating-card {
+    background: rgba(26, 29, 41, 0.8);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(214, 179, 126, 0.2);
+}
+
+/* Estilos para gradientes */
+.athena-gradient-primary {
+    background: linear-gradient(135deg, #d6b37e 0%, #b8941f 100%);
+}
+
+/* Estilos para sidebar */
+.sidebar-item {
+    background: rgba(26, 29, 41, 0.5);
+    border: 1px solid rgba(214, 179, 126, 0.1);
+}
+
+.sidebar-item:hover {
+    background: rgba(26, 29, 41, 0.8);
+    border-color: rgba(214, 179, 126, 0.3);
+}
+
+.sidebar-item.active {
+    background: rgba(214, 179, 126, 0.1);
+    border-color: rgba(214, 179, 126, 0.5);
+}
+
+/* Estilos para container de vídeo */
+.video-container {
+    background: rgba(26, 29, 41, 0.9);
+    border: 2px solid rgba(214, 179, 126, 0.3);
+}
+
+/* Animações */
+.animate-fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Responsividade */
+@media (max-width: 768px) {
+    .toast-notification {
+        top: 1rem;
+        right: 1rem;
+        left: 1rem;
+        max-width: none;
+    }
+}

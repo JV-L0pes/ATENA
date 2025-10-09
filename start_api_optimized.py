@@ -77,7 +77,7 @@ def validate_environment():
             return False
         
         # Verificar sistema otimizado
-        optimized_path = "athena_detection_optimized.py"
+        optimized_path = "athena_realtime_optimized.py"
         if Path(optimized_path).exists():
             logger.info(f"✅ Sistema otimizado encontrado: {optimized_path}")
         else:
@@ -127,17 +127,17 @@ def test_optimized_system():
     try:
         # Importar sistema otimizado
         try:
-            from athena_realtime_optimized import AthenaPhase1Detector
+            from athena_realtime_optimized import AthenaRealtimeDetector
             logger.info("✅ Usando sistema de tempo real otimizado")
-        except ImportError:
-            from athena_detection_optimized import AthenaPhase1Detector
-            logger.info("⚠️ Usando sistema padrão")
+        except ImportError as e:
+            logger.error(f"❌ Erro ao importar sistema otimizado: {e}")
+            return False
         
         # Criar detector de teste
-        detector = AthenaPhase1Detector()
+        detector = AthenaRealtimeDetector()
         
         # Testar inicialização
-        if detector.setup_detector():
+        if detector.initialize_model():
             logger.info("✅ Sistema otimizado inicializado com sucesso")
             
             # Testar processamento de frame

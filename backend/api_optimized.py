@@ -14,16 +14,20 @@ from typing import Dict, List, Optional, Any
 import cv2
 import numpy as np
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form
+from fastapi.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
+import uuid
+import shutil
 
 # Importar módulos locais
 from .config import CONFIG
 from .utils import setup_logging, encode_frame_jpeg, get_system_info
+from .video_detection import VideoAIDetector, VideoProcessingQueue, video_queue
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -36,10 +40,16 @@ try:
     from athena_realtime_optimized import AthenaDetectionSystemOptimized, AthenaPhase1Detector
     from webcam_recovery import StableWebcamCapture
     logger.info("✅ Usando sistema de tempo real otimizado")
-except ImportError:
-    from athena_detection_optimized import AthenaDetectionSystemOptimized, AthenaPhase1Detector
+except ImportError as e:
+    logger.error(f"❌ Erro ao importar sistema otimizado: {e}")
     StableWebcamCapture = None
-    logger.info("⚠️ Usando sistema padrão (tempo real não disponível)")
+    # Usar sistema básico como fallback
+    class AthenaDetectionSystemOptimized:
+        def __init__(self, *args, **kwargs):
+            pass
+    class AthenaPhase1Detector:
+        def __init__(self, *args, **kwargs):
+            pass
 
 # ===== DETECTOR OTIMIZADO INTEGRADO =====
 
@@ -118,27 +128,28 @@ class EPIDetectorOptimizedAPI:
             return False
     
     def start_system(self):
-        """Inicia sistema completo"""
+        """Inicia sistema completo (permissivo - não falha se não há câmera)"""
         if not self.is_initialized:
             if not self.initialize_model():
+                logging.warning("⚠️ Modelo não inicializado - sistema continuará sem detecção em tempo real")
                 return False
         
-        # Configurar câmera
-        if not self._setup_camera():
-            logging.error("❌ Falha ao configurar câmera")
-            return False
+        # Configurar câmera (permissivo)
+        camera_setup_success = self._setup_camera()
+        if not camera_setup_success:
+            logging.warning("⚠️ Câmera não configurada - sistema continuará sem stream em tempo real")
+            logging.info("💡 Funcionalidade de análise de vídeos permanece disponível")
         
-        # Iniciar sistema de recuperação apenas para USB
+        # Iniciar sistema de recuperação apenas para USB (permissivo)
         if self.webcam_capture and self.camera_type == "usb":
             if self.webcam_capture.initialize():
                 logging.info("✅ Sistema de recuperação de webcam iniciado")
             else:
-                logging.error("❌ Falha ao iniciar sistema de recuperação")
-                return False
+                logging.warning("⚠️ Sistema de recuperação não iniciado - continuando sem câmera")
         elif self.camera_type == "rtsp":
             logging.info("📹 Sistema RTSP configurado - aguardando stream do PC local")
         
-        logging.info("🎯 Sistema otimizado iniciado")
+        logging.info("🎯 Sistema otimizado iniciado (modo permissivo)")
         return True
     
     def _setup_camera(self):
@@ -211,11 +222,12 @@ class EPIDetectorOptimizedAPI:
                     logging.error(f"❌ URL da câmera IP inválida: {self.camera_source}")
                     return False
                 
-                # Testar conexão IP
+                # Testar conexão IP (permissivo)
                 cap = cv2.VideoCapture(self.camera_source)
                 if not cap.isOpened():
-                    logging.error(f"❌ Falha ao conectar câmera IP: {self.camera_source}")
-                    return False
+                    logging.warning(f"⚠️ Falha ao conectar câmera IP: {self.camera_source}")
+                    logging.info("💡 Funcionalidade de análise de vídeos permanece disponível")
+                    return True  # Permitir continuar sem câmera IP
                 cap.release()
                 
             else:
@@ -226,17 +238,19 @@ class EPIDetectorOptimizedAPI:
                     logging.error(f"❌ Índice da câmera USB inválido: {self.camera_source}")
                     return False
                 
-                # Usar sistema de recuperação se disponível
+                # Usar sistema de recuperação se disponível (permissivo)
                 if self.webcam_capture:
                     logging.info("🔄 Usando sistema de recuperação de webcam")
                     if self.webcam_capture.initialize():
                         logging.info("✅ Sistema de recuperação iniciado")
                         return True
                     else:
-                        logging.error("❌ Falha ao inicializar sistema de recuperação")
-                        return False
+                        logging.warning("⚠️ Sistema de recuperação não iniciado - continuando sem câmera")
+                        logging.info("💡 Funcionalidade de análise de vídeos permanece disponível")
+                        return True  # Permitir continuar sem câmera
                 else:
-                    logging.warning("⚠️ Sistema de recuperação não disponível")
+                    logging.warning("⚠️ Sistema de recuperação não disponível - continuando sem câmera")
+                    logging.info("💡 Funcionalidade de análise de vídeos permanece disponível")
                     return True  # Permitir continuar sem câmera local
             
             logging.info(f"✅ Câmera {self.camera_type.upper()} configurada")
@@ -287,8 +301,11 @@ class EPIDetectorOptimizedAPI:
             self.current_detections = results.get('detections', [])
             self.frame_count += 1
             
-            # Atualizar estatísticas
-            self._update_stats(results)
+            # Atualizar estatísticas diretamente do detector (já inclui compliance)
+            try:
+                self.stats = self.detector.get_stats()
+            except Exception:
+                self._update_stats(results)
             
             # Log para debug
             if self.frame_count % 30 == 0:  # Log a cada 30 frames
@@ -544,6 +561,14 @@ class ConnectionManager:
                 return_exceptions=True
             )
 
+    async def send_json(self, websocket: WebSocket, payload: dict):
+        if websocket.client_state == WebSocketState.CONNECTED:
+            await websocket.send_json(payload)
+
+    async def send_bytes(self, websocket: WebSocket, data: bytes):
+        if websocket.client_state == WebSocketState.CONNECTED:
+            await websocket.send_bytes(data)
+
 manager = ConnectionManager()
 
 @app.on_event("startup")
@@ -567,6 +592,40 @@ async def startup_event():
             app_state.detection_system.camera_type = "rtsp"
             app_state.detection_system.camera_source = rtsp_url
             logging.info(f"📹 Configurando RTSP via env: {rtsp_url}")
+            
+            # Testar conexão RTSP de forma não bloqueante
+            try:
+                import cv2
+                cap = cv2.VideoCapture(rtsp_url)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                cap.set(cv2.CAP_PROP_TIMEOUT, 5000)  # Timeout de 5 segundos
+                
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        logging.info(f"✅ RTSP conectado com sucesso: {rtsp_url}")
+                    else:
+                        logging.warning(f"⚠️ RTSP conectado mas sem frames: {rtsp_url}")
+                        logging.info("💡 Sistema continuará com webcam padrão")
+                        # Fallback para webcam se RTSP não funcionar
+                        app_state.detection_system.camera_type = "usb"
+                        app_state.detection_system.camera_source = 0
+                else:
+                    logging.warning(f"⚠️ RTSP não disponível: {rtsp_url}")
+                    logging.info("💡 Sistema continuará com webcam padrão")
+                    # Fallback para webcam se RTSP não funcionar
+                    app_state.detection_system.camera_type = "usb"
+                    app_state.detection_system.camera_source = 0
+                
+                cap.release()
+                
+            except Exception as e:
+                logging.warning(f"⚠️ Erro ao configurar RTSP: {e}")
+                logging.info("💡 Sistema continuará com webcam padrão")
+                # Fallback para webcam se houver erro
+                app_state.detection_system.camera_type = "usb"
+                app_state.detection_system.camera_source = 0
+                
         elif video_type == "http" and rtsp_url.startswith("http://"):
             app_state.detection_system.camera_type = "http"
             app_state.detection_system.camera_source = rtsp_url
@@ -585,13 +644,19 @@ async def startup_event():
             else:
                 app_state.detection_system.camera_source = camera_config.get("usb", {}).get("index", 0)
         
-        # Inicializar sistema
-        if app_state.detection_system.start_system():
-            app_state.model_loaded = True
-            logger.info("✅ Sistema otimizado da Fase 1 inicializado com sucesso!")
-        else:
-            logger.error("❌ Falha ao inicializar sistema otimizado")
-            raise Exception("Falha na inicialização do sistema")
+        # Inicializar sistema (permissivo - não falhar se não há câmera)
+        try:
+            if app_state.detection_system.start_system():
+                app_state.model_loaded = True
+                logger.info("✅ Sistema otimizado da Fase 1 inicializado com sucesso!")
+            else:
+                logger.warning("⚠️ Sistema de detecção não inicializado (sem câmera)")
+                logger.info("💡 Sistema continuará funcionando para análise de vídeos")
+                app_state.model_loaded = True  # Marcar como carregado mesmo sem câmera
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao inicializar sistema de detecção: {e}")
+            logger.info("💡 Sistema continuará funcionando para análise de vídeos")
+            app_state.model_loaded = True  # Marcar como carregado mesmo com erro
         
         # Inicializar outros sistemas
         from .snapshot import EPISnapshotSystem
@@ -658,14 +723,15 @@ async def get_model_classes():
     detector = app_state.detection_system.detector
     if hasattr(detector, 'class_names'):
         return {
-            "classes": detector.class_names,
+            "class_names": detector.class_names,
+            "enabled_classes": detector.get_enabled_classes() if hasattr(detector, 'get_enabled_classes') else detector.class_names,
             "total_classes": len(detector.class_names),
             "model_path": str(detector.model_path) if hasattr(detector, 'model_path') else "unknown"
         }
     else:
         # Fallback para classes padrão do modelo best.pt
         return {
-            "classes": [
+            "class_names": [
                 'person', 'ear', 'ear-mufs', 'face', 'face-guard', 'face-mask-medical', 
                 'foot', 'tools', 'glasses', 'gloves', 'helmet', 'hands', 'head', 
                 'medical-suit', 'shoes', 'safety-suit', 'safety-vest'
@@ -673,6 +739,30 @@ async def get_model_classes():
             "total_classes": 17,
             "model_path": "athena_training_2phase_optimized/models/phase1_complete/athena_phase1_tesla_t4/weights/best.pt"
         }
+
+@app.get("/classes/enabled")
+async def get_enabled_classes():
+    if not app_state.detection_system or not app_state.detection_system.detector:
+        raise HTTPException(status_code=503, detail="Sistema de detecção não inicializado")
+    detector = app_state.detection_system.detector
+    enabled = detector.get_enabled_classes() if hasattr(detector, 'get_enabled_classes') else detector.class_names
+    return {"enabled_classes": enabled}
+
+class ClassesUpdate(BaseModel):
+    enabled_classes: List[str]
+
+@app.put("/classes/enabled")
+async def update_enabled_classes(payload: ClassesUpdate):
+    if not app_state.detection_system or not app_state.detection_system.detector:
+        raise HTTPException(status_code=503, detail="Sistema de detecção não inicializado")
+    detector = app_state.detection_system.detector
+    if not hasattr(detector, 'set_enabled_classes'):
+        raise HTTPException(status_code=500, detail="Detector não suporta atualização de classes")
+    try:
+        detector.set_enabled_classes(payload.enabled_classes)
+        return {"enabled_classes": detector.get_enabled_classes()}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Erro ao atualizar classes: {str(e)}")
 
 @app.get("/stream.mjpg")
 async def video_stream():
@@ -700,9 +790,8 @@ async def video_stream():
                         results = app_state.detection_system.process_frame(frame)
                         processed_frame = results.get('processed_frame', frame)
                         
-                        # Codificar frame
-                        _, buffer = cv2.imencode('.jpg', processed_frame, 
-                                               [cv2.IMWRITE_JPEG_QUALITY, 85])
+                        # Codificar frame cru para reduzir latência
+                        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
                         frame_bytes = buffer.tobytes()
                         
                         yield (b'--frame\r\n'
@@ -742,8 +831,8 @@ async def video_stream():
                         results = app_state.detection_system.process_frame(frame)
                         processed_frame = results.get('processed_frame', frame)
                         
-                        # Converter para JPEG
-                        frame_bytes = encode_frame_jpeg(processed_frame, CONFIG.SNAPSHOT_QUALITY)
+                        # Converter frame cru (sem desenho) para reduzir latência de stream
+                        frame_bytes = encode_frame_jpeg(frame, 70)
                         
                         # Enviar frame MJPEG
                         yield (
@@ -770,72 +859,81 @@ async def video_stream():
 async def sse_detections():
     """SSE para detecções - Sistema Otimizado"""
     async def event_generator():
-        cap = None
         try:
-            # Configurar captura de vídeo baseado no tipo
-            if app_state.detection_system.camera_type in ["rtsp", "http", "udp"]:
-                cap = cv2.VideoCapture(app_state.detection_system.camera_source)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Buffer mínimo para baixa latência
-                
-                # Configurações específicas para RTSP/HTTP/UDP
-                if app_state.detection_system.camera_type == "rtsp":
-                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('H', '2', '6', '4'))
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-                    cap.set(cv2.CAP_PROP_FPS, 30)
-                    # Configurações para lidar com erros H.264
-                    cap.set(cv2.CAP_PROP_CONVERT_RGB, 1)
-                
-                logging.info(f"📹 SSE usando {app_state.detection_system.camera_type}: {app_state.detection_system.camera_source}")
-            elif app_state.detection_system.camera_type == "ip":
-                cap = cv2.VideoCapture(app_state.detection_system.camera_source)
-            else:
-                cap = cv2.VideoCapture(app_state.detection_system.camera_source)
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                cap.set(cv2.CAP_PROP_FPS, 30)
-            
-            if not cap.isOpened():
-                raise HTTPException(status_code=503, detail="Câmera não disponível")
+            logging.info("📡 SSE iniciado - usando dados do sistema de detecção")
             
             while True:
-                ret, frame = cap.read()
-                if ret:
-                    # Processar frame com sistema otimizado
-                    results = app_state.detection_system.process_frame(frame)
-                    
-                    detections = results.get('detections', [])
-                    stats = results.get('stats', {})
-                    
-                    # Atualizar stats globais
-                    app_state.stats = stats
-                    app_state.frame_count = app_state.detection_system.frame_count
+                # Usar dados já processados pelo sistema de detecção
+                if app_state.detection_system and app_state.detection_system.current_detections is not None:
+                    detections = app_state.detection_system.current_detections
+                    stats = app_state.detection_system.stats
+                    frame_count = app_state.detection_system.frame_count
+                    violations = []
+                    try:
+                        if hasattr(app_state.detection_system, 'detector') and hasattr(app_state.detection_system.detector, 'current_violations'):
+                            violations = app_state.detection_system.detector.current_violations or []
+                    except Exception:
+                        violations = []
                     
                     # Formatar dados para SSE
                     event_data = {
-                        "frame_id": app_state.frame_count,
+                        "frame_id": frame_count,
                         "boxes": detections,
-                        "epi_summary": stats,
+                        "epi_summary": {
+                            "com_capacete": stats.get("com_capacete", 0),
+                            "sem_capacete": stats.get("sem_capacete", 0),
+                            "com_colete": stats.get("com_colete", 0),
+                            "sem_colete": stats.get("sem_colete", 0),
+                            "total_pessoas": stats.get("total_pessoas", 0),
+                            "compliance_score": stats.get("compliance_score", 0.0),
+                            "detection_rate": stats.get("detection_rate", 0.0),
+                            "avg_confidence": stats.get("avg_confidence", 0.0)
+                        },
                         "total_people": stats.get("total_pessoas", 0),
                         "compliance_rate": stats.get("compliance_score", 0.0),
                         "detection_rate": stats.get("detection_rate", 0.0),
                         "avg_confidence": stats.get("avg_confidence", 0.0),
-                        "violations": []
+                        "violations": violations
                     }
                     
-                    # Log para debug
-                    logging.info(f"🔍 SSE Frame {app_state.frame_count}: {len(detections)} detecções")
+                    # Log para debug (apenas quando há detecções)
+                    if detections:
+                        logging.info(f"🔍 SSE Frame {frame_count}: {len(detections)} detecções")
                     
                     # Enviar dados
                     yield f"data: {json.dumps(event_data)}\n\n"
                     
+                    # Atualizar stats globais
+                    app_state.stats = stats
+                    app_state.frame_count = frame_count
+                    
                     # Adicionar ao histórico
                     if detections and app_state.history_system:
                         app_state.history_system.add_detection(
-                            app_state.frame_count, detections, stats
+                            frame_count, detections, stats
                         )
                 else:
-                    logging.warning("⚠️ SSE: Frame não capturado")
+                    # Sistema não inicializado - enviar dados vazios
+                    event_data = {
+                        "frame_id": 0,
+                        "boxes": [],
+                        "epi_summary": {
+                            "com_capacete": 0,
+                            "sem_capacete": 0,
+                            "com_colete": 0,
+                            "sem_colete": 0,
+                            "total_pessoas": 0,
+                            "compliance_score": 0.0,
+                            "detection_rate": 0.0,
+                            "avg_confidence": 0.0
+                        },
+                        "total_people": 0,
+                        "compliance_rate": 0.0,
+                        "detection_rate": 0.0,
+                        "avg_confidence": 0.0,
+                        "violations": []
+                    }
+                    yield f"data: {json.dumps(event_data)}\n\n"
                 
                 # Aguardar próximo evento (10 FPS)
                 await asyncio.sleep(0.1)
@@ -843,9 +941,6 @@ async def sse_detections():
         except Exception as e:
             logger.error(f"❌ Erro no SSE: {e}")
             await asyncio.sleep(1)
-        finally:
-            if cap:
-                cap.release()
     
     return StreamingResponse(
         event_generator(),
@@ -965,6 +1060,340 @@ async def restart_detection_system():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao reiniciar sistema: {str(e)}")
 
+# ===== ENDPOINT DE DETECÇÃO EM TEMPO REAL =====
+
+@app.websocket("/ws/detect-video")
+async def ws_detect_video(ws: WebSocket):
+    await manager.connect(ws)
+    try:
+        await ws.send_json({"type": "ready"})
+        while True:
+            frame_bytes = await ws.receive_bytes()
+            nparr = np.frombuffer(frame_bytes, np.uint8)
+            image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if image is None:
+                await ws.send_json({"type": "error", "message": "frame inválido"})
+                continue
+
+            if not app_state.detection_system or not getattr(app_state.detection_system, 'detector', None):
+                await ws.send_json({"type": "error", "message": "detector indisponível"})
+                continue
+
+            try:
+                # Redimensionar como no POST para consistência
+                h, w = image.shape[:2]
+                max_side = 640
+                if max(h, w) > max_side:
+                    scale = max_side / max(h, w)
+                    new_w, new_h = int(w * scale), int(h * scale)
+                    image = cv2.resize(image, (new_w, new_h))
+                    h, w = image.shape[:2]
+
+                result = app_state.detection_system.detector.process_frame(image)
+                raw_dets = result.get("detections", [])
+                # Formatar como no endpoint HTTP
+                formatted = []
+                for d in raw_dets:
+                    formatted.append({
+                        "class_name": d.get("class_name"),
+                        "confidence": float(d.get("confidence", 0.0)),
+                        "bbox": d.get("bbox", [])
+                    })
+
+                await ws.send_json({
+                    "type": "detections",
+                    "detections": formatted,
+                    "frame_width": int(w),
+                    "frame_height": int(h)
+                })
+            except Exception as e:
+                logger.error(f"Erro processamento WS: {e}")
+                await ws.send_json({"type": "error", "message": "falha processamento"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await manager.disconnect(ws)
+
+@app.post("/api/test-upload")
+async def test_upload(file: UploadFile = File(...)):
+    """Endpoint de teste para upload"""
+    try:
+        content = await file.read()
+        return {
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "size": file.size,
+            "content_length": len(content),
+            "status": "success"
+        }
+    except Exception as e:
+        logger.error(f"Erro no teste: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/detect-frame")
+async def detect_frame(
+    file: UploadFile | None = File(None),
+    image: UploadFile | None = File(None)
+):
+    """Detectar EPIs em um frame de vídeo"""
+    try:
+        # Aceitar tanto 'file' quanto 'image'
+        upload = file or image
+        if upload is None:
+            raise HTTPException(status_code=400, detail="Campo 'file' ou 'image' é obrigatório")
+
+        logger.info(f"Recebendo arquivo: {upload.filename}, tipo: {upload.content_type}, tamanho: {getattr(upload, 'size', 'n/a')}")
+        
+        # Ler imagem primeiro
+        content = await upload.read()
+        
+        # Validar se é uma imagem válida
+        if not content:
+            logger.error("Arquivo vazio recebido")
+            raise HTTPException(status_code=400, detail="Arquivo vazio")
+        
+        logger.info(f"Conteúdo lido: {len(content)} bytes")
+        
+        # Converter para numpy array
+        nparr = np.frombuffer(content, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if image is None:
+            logger.error(f"Erro ao decodificar imagem: {len(content)} bytes")
+            raise HTTPException(status_code=400, detail="Imagem inválida")
+        
+        logger.info(f"Imagem decodificada: {image.shape}")
+        
+        # Usar o detector do sistema principal (via app_state)
+        if not app_state.detection_system or not getattr(app_state.detection_system, 'detector', None):
+            raise HTTPException(status_code=500, detail="Sistema de detecção não disponível")
+
+        # Reduzir a imagem no backend também (consistente com front)
+        try:
+            h, w = image.shape[:2]
+            max_side = 640
+            if max(h, w) > max_side:
+                scale = max_side / max(h, w)
+                new_w, new_h = int(w * scale), int(h * scale)
+                image = cv2.resize(image, (new_w, new_h))
+
+            result = app_state.detection_system.detector.process_frame(image)
+        except Exception as e:
+            logger.error(f"Erro ao processar frame no detector: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Falha no processamento do frame")
+        detections = result.get('detections', [])
+        
+        # Formatar resultados
+        formatted_detections = []
+        for detection in detections:
+            formatted_detections.append({
+                "class_name": detection.get("class_name"),
+                "confidence": float(detection.get("confidence", 0.0)),
+                "bbox": detection.get("bbox", [])
+            })
+        
+        h, w = image.shape[:2]
+        return {
+            "detections": formatted_detections,
+            "frame_width": int(w),
+            "frame_height": int(h),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erro na detecção de frame: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erro na detecção: {str(e)}")
+
+# ===== ENDPOINTS DE VÍDEO =====
+
+# Criar diretórios para vídeos
+VIDEO_UPLOAD_DIR = Path("uploads/videos")
+VIDEO_PROCESSED_DIR = Path("processed/videos")
+VIDEO_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+VIDEO_PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+
+# Inicializar fila de processamento
+video_queue.start()
+
+@app.post("/api/videos/upload")
+async def upload_video(file: UploadFile = File(...)):
+    """Upload de vídeo para processamento"""
+    try:
+        # Validar tipo de arquivo
+        detector = VideoAIDetector()
+        if not any(file.filename.lower().endswith(ext) for ext in detector.get_supported_formats()):
+            raise HTTPException(status_code=400, detail="Formato de vídeo não suportado")
+        
+        # Gerar ID único para o vídeo
+        video_id = str(uuid.uuid4())
+        file_extension = Path(file.filename).suffix
+        video_filename = f"{video_id}{file_extension}"
+        video_path = VIDEO_UPLOAD_DIR / video_filename
+        
+        # Salvar arquivo
+        with open(video_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Validar vídeo
+        validation = detector.validate_video(str(video_path))
+        if not validation['valid']:
+            os.remove(video_path)
+            raise HTTPException(status_code=400, detail=f"Vídeo inválido: {validation['error']}")
+        
+        # Adicionar à fila de processamento
+        output_path = VIDEO_PROCESSED_DIR / f"{video_id}_processed.mp4"
+        success = video_queue.add_video(
+            video_id=video_id,
+            video_path=str(video_path),
+            output_path=str(output_path)
+        )
+        
+        if not success:
+            os.remove(video_path)
+            raise HTTPException(status_code=500, detail="Erro ao adicionar vídeo à fila")
+        
+        return {
+            "video_id": video_id,
+            "filename": file.filename,
+            "status": "queued",
+            "video_info": validation['info'],
+            "message": "Vídeo enviado com sucesso"
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro no upload do vídeo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/videos/{video_id}/status")
+async def get_video_status(video_id: str):
+    """Obtém status do processamento de um vídeo"""
+    try:
+        status = video_queue.get_status(video_id)
+        if 'error' in status:
+            raise HTTPException(status_code=404, detail=status['error'])
+        
+        return status
+        
+    except Exception as e:
+        logger.error(f"Erro ao obter status do vídeo {video_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/videos/{video_id}/results")
+async def get_video_results(video_id: str):
+    """Obtém resultados do processamento de um vídeo"""
+    try:
+        status = video_queue.get_status(video_id)
+        if 'error' in status:
+            raise HTTPException(status_code=404, detail=status['error'])
+        
+        if status['status'] != 'completed':
+            raise HTTPException(status_code=400, detail="Vídeo ainda não foi processado")
+        
+        return {
+            "video_id": video_id,
+            "results": status['results'],
+            "status": status['status']
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao obter resultados do vídeo {video_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/videos/{video_id}/download")
+async def download_processed_video(video_id: str):
+    """Download do vídeo processado"""
+    try:
+        status = video_queue.get_status(video_id)
+        if 'error' in status:
+            raise HTTPException(status_code=404, detail=status['error'])
+        
+        if status['status'] != 'completed':
+            raise HTTPException(status_code=400, detail="Vídeo ainda não foi processado")
+        
+        output_path = VIDEO_PROCESSED_DIR / f"{video_id}_processed.mp4"
+        if not output_path.exists():
+            raise HTTPException(status_code=404, detail="Arquivo processado não encontrado")
+        
+        return FileResponse(
+            path=str(output_path),
+            filename=f"{video_id}_processed.mp4",
+            media_type="video/mp4"
+        )
+        
+    except Exception as e:
+        logger.error(f"Erro no download do vídeo {video_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/videos/formats")
+async def get_supported_formats():
+    """Retorna formatos de vídeo suportados"""
+    detector = VideoAIDetector()
+    return {
+        "supported_formats": detector.get_supported_formats(),
+        "max_file_size": "500MB",
+        "recommended_formats": [".mp4", ".avi", ".mov"]
+    }
+
+@app.get("/api/videos/list")
+async def list_videos():
+    """Lista todos os vídeos processados"""
+    try:
+        videos = []
+        
+        # Listar vídeos na fila
+        for video_id, status in video_queue.results.items():
+            videos.append({
+                "video_id": video_id,
+                "status": status['status'],
+                "created_at": status.get('created_at'),
+                "started_at": status.get('started_at'),
+                "completed_at": status.get('completed_at'),
+                "filename": status.get('filename', 'N/A')
+            })
+        
+        return {
+            "videos": videos,
+            "total": len(videos)
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao listar vídeos: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/videos/{video_id}")
+async def delete_video(video_id: str):
+    """Remove um vídeo e seus arquivos"""
+    try:
+        # Remover da fila se ainda estiver processando
+        if video_id in video_queue.results:
+            del video_queue.results[video_id]
+        
+        # Remover arquivos
+        files_to_remove = [
+            VIDEO_UPLOAD_DIR / f"{video_id}.*",
+            VIDEO_PROCESSED_DIR / f"{video_id}_processed.mp4"
+        ]
+        
+        removed_files = []
+        for file_pattern in files_to_remove:
+            for file_path in Path(file_pattern.parent).glob(file_pattern.name):
+                try:
+                    file_path.unlink()
+                    removed_files.append(str(file_path))
+                except FileNotFoundError:
+                    pass
+        
+        return {
+            "message": "Vídeo removido com sucesso",
+            "removed_files": removed_files
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao remover vídeo {video_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Rota raiz
 @app.get("/")
 async def root():
@@ -983,6 +1412,16 @@ async def serve_frontend():
         return FileResponse(frontend_path)
     else:
         raise HTTPException(status_code=404, detail="Frontend não encontrado")
+
+# Rota para servir o dashboard
+@app.get("/dashboard")
+async def serve_dashboard():
+    """Serve o dashboard principal"""
+    frontend_path = Path("frontend/index.html")
+    if frontend_path.exists():
+        return FileResponse(frontend_path)
+    else:
+        raise HTTPException(status_code=404, detail="Dashboard não encontrado")
 
 # Servir arquivos estáticos
 app.mount("/snapshots", StaticFiles(directory=str(CONFIG.SNAPSHOT_DIR)), name="snapshots")

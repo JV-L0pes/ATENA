@@ -48,7 +48,7 @@ class AthenaRealtimeDetector:
         
         # Configurações ultra-otimizadas para tempo real
         self.config = {
-            'conf_threshold': 0.25,  # Threshold compatível com modelo best.pt
+            'conf_threshold': 0.5,  # Threshold aumentado para maior precisão
             'iou_threshold': 0.45,
             'max_detections': 100,   # Limite maior para modelo de 17 classes
             'frame_skip': 2,        # Processar apenas 1 a cada 2 frames
@@ -57,12 +57,19 @@ class AthenaRealtimeDetector:
             'warmup_frames': 5       # Frames de aquecimento
         }
         
+        # EPIs requeridos (configurável via env: REQUIRED_EPIS=helmet,safety-vest,gloves,glasses)
+        required_epis_env = os.getenv("REQUIRED_EPIS", "helmet,safety-vest,gloves,glasses")
+        self.required_epis = set([e.strip() for e in required_epis_env.split(',') if e.strip()])
+
         # Classes do modelo best.pt (17 classes)
         self.class_names = [
             'person', 'ear', 'ear-mufs', 'face', 'face-guard', 'face-mask-medical', 
             'foot', 'tools', 'glasses', 'gloves', 'helmet', 'hands', 'head', 
             'medical-suit', 'shoes', 'safety-suit', 'safety-vest'
         ]
+
+        # Classes habilitadas para detecção (por padrão todas ativas)
+        self.enabled_classes = set(self.class_names)
         
         # Classes principais para EPIs (mapeamento para o modelo)
         self.main_classes = ['person', 'helmet', 'safety-vest', 'gloves', 'glasses']
@@ -71,12 +78,13 @@ class AthenaRealtimeDetector:
         self.current_frame = None
         self.processed_frame = None
         self.current_detections = []
+        self.current_violations = []
         self.frame_count = 0
         self.last_process_time = 0
         self.fps_counter = deque(maxlen=30)
         
         # Threading otimizado
-        self.frame_queue = Queue(maxsize=3)  # Fila pequena para evitar acúmulo
+        self.frame_queue = Queue(maxsize=1)  # Fila mínima: sempre o frame mais novo
         self.detection_thread = None
         self.running = False
         
@@ -87,7 +95,21 @@ class AthenaRealtimeDetector:
             'avg_processing_time': 0.0,
             'frames_processed': 0,
             'frames_skipped': 0,
-            'total_frames': 0
+            'total_frames': 0,
+            # Estatísticas de compliance
+            'total_pessoas': 0,
+            'com_capacete': 0,
+            'sem_capacete': 0,
+            'com_colete': 0,
+            'sem_colete': 0,
+            'com_luvas': 0,
+            'sem_luvas': 0,
+            'com_oculos': 0,
+            'sem_oculos': 0,
+            'compliance_score': 0.0,
+            'detection_rate': 0.0,
+            'avg_confidence': 0.0,
+            'violations': []
         }
         
         logger.info("🚀 Detector ATHENA Tempo Real inicializado")
@@ -110,6 +132,8 @@ class AthenaRealtimeDetector:
             
             # Atualizar class_names com as classes reais do modelo
             self.class_names = list(self.model.names.values())
+            # Inicializar enabled_classes com todas as classes do modelo
+            self.enabled_classes = set(self.class_names)
             
             # Configurar dispositivo
             if torch.cuda.is_available():
@@ -129,7 +153,8 @@ class AthenaRealtimeDetector:
                 'max_det': self.config['max_detections'],
                 'verbose': False,
                 'half': True if self.device.type == 'cuda' else False,  # FP16 para GPU
-                'device': self.device
+                'device': self.device,
+                'imgsz': 640
             }
             
             # Aquecimento do modelo
@@ -190,7 +215,7 @@ class AthenaRealtimeDetector:
                 
                 # Detecção ultra-rápida
                 with torch.no_grad():
-                    results = self.model(frame_small, verbose=False)
+                    results = self.model(frame_small, verbose=False, imgsz=640)
                 
                 # Processar resultados
                 detections = self._process_results(results, frame.shape)
@@ -200,6 +225,9 @@ class AthenaRealtimeDetector:
                     scale_factor = 1.0 / self.config['resize_factor']
                     for detection in detections:
                         detection['bbox'] = [int(x * scale_factor) for x in detection['bbox']]
+
+                # Avaliar compliance (associar EPIs a pessoas e inferir ausências)
+                detections, violations = self._evaluate_compliance(detections)
                 
                 # Desenhar resultados
                 processed_frame = self._draw_detections(frame, detections)
@@ -208,6 +236,7 @@ class AthenaRealtimeDetector:
                 self.current_frame = frame.copy()
                 self.processed_frame = processed_frame
                 self.current_detections = detections
+                self.current_violations = violations
                 self.frame_count += 1
                 
                 # Calcular FPS
@@ -247,8 +276,8 @@ class AthenaRealtimeDetector:
                         x1, y1, x2, y2 = box
                         class_name = self.class_names[int(cls)]
                         
-                        # Filtrar detecções baseado no threshold de confiança
-                        if conf >= self.config['conf_threshold']:
+                        # Filtrar por threshold e classes habilitadas
+                        if conf >= self.config['conf_threshold'] and class_name in self.enabled_classes:
                             detection = {
                                 'bbox': [int(x1), int(y1), int(x2), int(y2)],
                                 'confidence': float(conf),
@@ -296,19 +325,271 @@ class AthenaRealtimeDetector:
             class_name = detection['class_name']
             confidence = detection['confidence']
             
-            # Cor baseada na classe
-            color = colors.get(class_name, colors['other'])
+            # Exibir apenas boxes cirúrgicos (missing-*) no stream
+            if not (isinstance(class_name, str) and class_name.startswith('missing-')):
+                continue
+            
+            # Cor fixa vermelha para ausências
+            color = (0, 0, 255)
             
             # Desenhar bounding box
             cv2.rectangle(frame_copy, (x1, y1), (x2, y2), color, 2)
             
-            # Desenhar label (apenas se confiança alta)
+            # Desenhar label (apenas para missing-*)
             if confidence > 0.6:
-                label = f"{class_name}: {confidence:.2f}"
+                nice = class_name.replace('missing-', '').replace('-', ' ')
+                label = f"Faltando: {nice}"
                 cv2.putText(frame_copy, label, (x1, y1 - 10), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         
         return frame_copy
+
+    def _evaluate_compliance(self, detections: List[Dict[str, Any]]):
+        """Associa EPIs às pessoas e infere ausências.
+        Retorna (detections_atualizadas, violations).
+        """
+        if not detections:
+            # reset stats de pessoas
+            self._update_compliance_stats(total_pessoas=0, per_person=[])
+            return detections, []
+
+        persons: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') == 'person']
+        # EPIs considerados para compliance = interseção entre requeridos e habilitados
+        active_required = self.required_epis.intersection(self.enabled_classes)
+        epis: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') in active_required]
+        supports_head: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') in ('head', 'face')]
+        supports_hands: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') == 'hands']
+
+        def bbox_center(b):
+            x1, y1, x2, y2 = b
+            return (int((x1 + x2) / 2), int((y1 + y2) / 2))
+
+        def center_inside(center, box):
+            cx, cy = center
+            x1, y1, x2, y2 = box
+            return x1 <= cx <= x2 and y1 <= cy <= y2
+
+        def clip_box(x1, y1, x2, y2):
+            return [max(0, int(x1)), max(0, int(y1)), max(0, int(x2)), max(0, int(y2))]
+
+        def iou(a, b):
+            ax1, ay1, ax2, ay2 = a; bx1, by1, bx2, by2 = b
+            inter_x1, inter_y1 = max(ax1, bx1), max(ay1, by1)
+            inter_x2, inter_y2 = min(ax2, bx2), min(ay2, by2)
+            inter_w, inter_h = max(0, inter_x2 - inter_x1), max(0, inter_y2 - inter_y1)
+            inter = inter_w * inter_h
+            area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+            area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+            union = area_a + area_b - inter
+            return inter / union if union > 0 else 0.0
+
+        def find_support_in(person_box, support_list):
+            best = None
+            best_iou = 0.0
+            for s in support_list:
+                ov = iou(person_box, s['bbox'])
+                if ov > best_iou:
+                    best_iou = ov
+                    best = s
+            return best
+
+        # Mapeamento de EPIs presentes por pessoa
+        per_person_present = []
+        violations = []
+        virtual_missing_detections: List[Dict[str, Any]] = []
+        for person in persons:
+            px1, py1, px2, py2 = person['bbox']
+            ph = max(1, py2 - py1)
+            # região do topo para capacete/óculos
+            top_region_y = py1 + int(0.35 * ph)
+            present = set()
+
+            for epi in epis:
+                c = bbox_center(epi['bbox'])
+                if not center_inside(c, person['bbox']):
+                    continue
+                ename = epi['class_name']
+                # Regras rápidas por região
+                if ename == 'helmet':
+                    if c[1] <= top_region_y:
+                        present.add('helmet')
+                elif ename == 'glasses':
+                    if c[1] <= top_region_y:
+                        present.add('glasses')
+                elif ename == 'safety-vest':
+                    present.add('safety-vest')
+                elif ename == 'gloves':
+                    present.add('gloves')
+
+            missing = [e for e in active_required if e not in present]
+            person['missing_epis'] = missing
+            person['compliant'] = len(missing) == 0
+            per_person_present.append({
+                'present': present,
+                'missing': missing
+            })
+            if missing:
+                violations.append({
+                    'person_bbox': person['bbox'],
+                    'missing_epis': missing
+                })
+
+                # Criar detecções virtuais "missing-*" com ROIs específicas por EPI ausente
+                for m in missing:
+                    if m == 'helmet':
+                        support = find_support_in(person['bbox'], supports_head)
+                        if support is not None:
+                            vx1, vy1, vx2, vy2 = support['bbox']
+                            roi = clip_box(vx1, vy1, vx2, vy2)
+                        else:
+                            vx1 = px1 + int(0.15 * (px2 - px1))
+                            vx2 = px2 - int(0.15 * (px2 - px1))
+                            vy1 = py1
+                            vy2 = py1 + int(0.30 * ph)
+                            roi = clip_box(vx1, vy1, vx2, vy2)
+                        virtual_missing_detections.append({
+                            'bbox': roi,
+                            'confidence': 1.0,
+                            'class_name': 'missing-helmet',
+                            'class_id': -1,
+                            'frame_id': self.frame_count,
+                            'timestamp': time.time()
+                        })
+                    elif m == 'glasses':
+                        support = find_support_in(person['bbox'], supports_head)
+                        if support is not None:
+                            sx1, sy1, sx2, sy2 = support['bbox']
+                            sh = max(1, sy2 - sy1)
+                            vy1 = sy1 + int(0.25 * sh)
+                            vy2 = sy1 + int(0.45 * sh)
+                            vx1 = sx1 + int(0.20 * (sx2 - sx1))
+                            vx2 = sx2 - int(0.20 * (sx2 - sx1))
+                            roi = clip_box(vx1, vy1, vx2, vy2)
+                        else:
+                            vy1 = py1 + int(0.18 * ph)
+                            vy2 = py1 + int(0.35 * ph)
+                            vx1 = px1 + int(0.25 * (px2 - px1))
+                            vx2 = px2 - int(0.25 * (px2 - px1))
+                            roi = clip_box(vx1, vy1, vx2, vy2)
+                        virtual_missing_detections.append({
+                            'bbox': roi,
+                            'confidence': 1.0,
+                            'class_name': 'missing-glasses',
+                            'class_id': -1,
+                            'frame_id': self.frame_count,
+                            'timestamp': time.time()
+                        })
+                    elif m == 'safety-vest':
+                        vy1 = py1 + int(0.35 * ph)
+                        vy2 = py1 + int(0.75 * ph)
+                        vx1 = px1 + int(0.15 * (px2 - px1))
+                        vx2 = px2 - int(0.15 * (px2 - px1))
+                        roi = clip_box(vx1, vy1, vx2, vy2)
+                        virtual_missing_detections.append({
+                            'bbox': roi,
+                            'confidence': 1.0,
+                            'class_name': 'missing-safety-vest',
+                            'class_id': -1,
+                            'frame_id': self.frame_count,
+                            'timestamp': time.time()
+                        })
+                    elif m == 'gloves':
+                        # Preferir ROIs de mãos detectadas
+                        matched_hands = []
+                        for h in supports_hands:
+                            c = bbox_center(h['bbox'])
+                            if center_inside(c, person['bbox']):
+                                matched_hands.append(h['bbox'])
+                        if matched_hands:
+                            for hb in matched_hands:
+                                vx1, vy1, vx2, vy2 = hb
+                                roi = clip_box(vx1, vy1, vx2, vy2)
+                                virtual_missing_detections.append({
+                                    'bbox': roi,
+                                    'confidence': 1.0,
+                                    'class_name': 'missing-gloves',
+                                    'class_id': -1,
+                                    'frame_id': self.frame_count,
+                                    'timestamp': time.time()
+                                })
+                        else:
+                            # fallback: duas regiões inferiores laterais
+                            bw = px2 - px1
+                            vy1 = py2 - int(0.25 * ph)
+                            vy2 = py2 - int(0.05 * ph)
+                            # esquerda
+                            vx1 = px1 + int(0.05 * bw)
+                            vx2 = px1 + int(0.35 * bw)
+                            roi_l = clip_box(vx1, vy1, vx2, vy2)
+                            virtual_missing_detections.append({
+                                'bbox': roi_l,
+                                'confidence': 1.0,
+                                'class_name': 'missing-gloves',
+                                'class_id': -1,
+                                'frame_id': self.frame_count,
+                                'timestamp': time.time()
+                            })
+                            # direita
+                            vx1 = px2 - int(0.35 * bw)
+                            vx2 = px2 - int(0.05 * bw)
+                            roi_r = clip_box(vx1, vy1, vx2, vy2)
+                            virtual_missing_detections.append({
+                                'bbox': roi_r,
+                                'confidence': 1.0,
+                                'class_name': 'missing-gloves',
+                                'class_id': -1,
+                                'frame_id': self.frame_count,
+                                'timestamp': time.time()
+                            })
+
+        # Atualizar estatísticas agregadas
+        self._update_compliance_stats(total_pessoas=len(persons), per_person=per_person_present)
+
+        # Anexar virtual_missing_detections para visualização/SSE
+        if virtual_missing_detections:
+            detections = detections + virtual_missing_detections
+
+        return detections, violations
+
+    def _update_compliance_stats(self, total_pessoas: int, per_person: List[Dict[str, Any]]):
+        com_capacete = sum(1 for p in per_person if 'helmet' in p['present'])
+        sem_capacete = total_pessoas - com_capacete
+        com_colete = sum(1 for p in per_person if 'safety-vest' in p['present'])
+        sem_colete = total_pessoas - com_colete
+        com_luvas = sum(1 for p in per_person if 'gloves' in p['present'])
+        sem_luvas = total_pessoas - com_luvas
+        com_oculos = sum(1 for p in per_person if 'glasses' in p['present'])
+        sem_oculos = total_pessoas - com_oculos
+        compliant = sum(1 for p in per_person if not p['missing'])
+        compliance_score = (compliant / total_pessoas * 100.0) if total_pessoas > 0 else 0.0
+
+        self.stats.update({
+            'total_pessoas': total_pessoas,
+            'com_capacete': com_capacete,
+            'sem_capacete': sem_capacete,
+            'com_colete': com_colete,
+            'sem_colete': sem_colete,
+            'com_luvas': com_luvas,
+            'sem_luvas': sem_luvas,
+            'com_oculos': com_oculos,
+            'sem_oculos': sem_oculos,
+            'compliance_score': compliance_score,
+        })
+
+    # ===== API auxiliar para habilitar/desabilitar classes =====
+    def get_enabled_classes(self) -> List[str]:
+        return sorted(list(self.enabled_classes))
+
+    def set_enabled_classes(self, enabled: List[str]):
+        if not enabled:
+            # garantir que pelo menos 'person' fique habilitada para compliance básico
+            self.enabled_classes = {'person'} if 'person' in self.class_names else set()
+            return
+        valid = set(c for c in enabled if c in self.class_names)
+        if 'person' in self.class_names and 'person' not in valid:
+            # manter 'person' sempre habilitada
+            valid.add('person')
+        self.enabled_classes = valid
     
     def add_frame(self, frame):
         """Adiciona frame para processamento"""
@@ -354,7 +635,7 @@ class AthenaRealtimeDetector:
             
             # Detecção ultra-rápida
             with torch.no_grad():
-                results = self.model(frame_small, verbose=False)
+                results = self.model(frame_small, verbose=False, imgsz=640)
             
             # Processar resultados
             detections = self._process_results(results, frame.shape)
@@ -365,6 +646,9 @@ class AthenaRealtimeDetector:
                 for detection in detections:
                     detection['bbox'] = [int(x * scale_factor) for x in detection['bbox']]
             
+            # Avaliar compliance (associar EPIs a pessoas e inferir ausências)
+            detections, violations = self._evaluate_compliance(detections)
+
             # Desenhar resultados
             processed_frame = self._draw_detections(frame, detections)
             
@@ -372,6 +656,7 @@ class AthenaRealtimeDetector:
             self.current_frame = frame.copy()
             self.processed_frame = processed_frame
             self.current_detections = detections
+            self.current_violations = violations
             self.frame_count += 1
             
             # Atualizar estatísticas
