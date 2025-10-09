@@ -590,7 +590,7 @@
                         
                         <!-- Video Player -->
                         <div x-show="currentVideo" class="mb-6">
-                            <div class="relative bg-black rounded-xl overflow-hidden">
+                            <div id="videoContainer" class="relative bg-black rounded-xl overflow-hidden">
                                 <video id="videoPlayer" 
                                        :src="currentVideoUrl" 
                                        class="w-full h-auto"
@@ -615,9 +615,12 @@
                                             <i class="fas mr-1" :class="detectionActive ? 'fa-stop' : 'fa-play'"></i>
                                             <span x-text="detectionActive ? 'Parar' : 'Detectar'"></span>
                                         </button>
+                                        <button @click="toggleFullscreen()" class="px-3 py-1 rounded bg-athena-navy/70 text-white text-sm font-medium hover:bg-athena-navy/80 transition-colors">
+                                            <i class="fas fa-expand"></i>
+                                        </button>
                                         
                                         <div class="text-white text-sm">
-                                            <div>FPS: <span x-text="detectionFPS"></span></div>
+                                            <div><span x-text="detectionFPS"></span></div>
                                             <div>Detecções: <span x-text="currentDetections.length"></span></div>
                                         </div>
                                     </div>

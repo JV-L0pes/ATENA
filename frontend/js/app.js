@@ -125,6 +125,11 @@ function athenaApp() {
         videoPlayer: null,
         videoOverlay: null,
         lastSentFrameSize: { width: 0, height: 0 },
+        // WebSocket métricas/adaptação
+        wsLastSendAt: 0,
+        wsRTTms: 0,
+        dynamicTargetFps: 2,
+        dynamicJpegQuality: 0.5,
         
         // Sistema de detecções
         eventSource: null,
@@ -161,6 +166,10 @@ function athenaApp() {
             }, 3000);
             
             console.log('✅ Athena Dashboard inicializado');
+
+            // redimensionar overlay quando janela muda / fullscreen
+            window.addEventListener('resize', () => this.resizeOverlayToVideo());
+            document.addEventListener('fullscreenchange', () => this.resizeOverlayToVideo());
         },
 
         // Navegação
@@ -763,7 +772,7 @@ function athenaApp() {
             if (typeof this.videoPlayer.requestVideoFrameCallback === 'function') return;
             if (this.detectionActive && this.videoPlayer) {
                 const now = performance.now();
-                const minIntervalMs = 1000 / CONFIG.DETECTION.TARGET_FPS;
+                const minIntervalMs = 1000 / (this.dynamicTargetFps || CONFIG.DETECTION.TARGET_FPS);
                 if (now - this.lastDetectionTime >= minIntervalMs && !this.inFlightDetection) {
                     this.detectInCurrentFrame();
                     this.lastDetectionTime = now;
@@ -788,7 +797,7 @@ function athenaApp() {
                     const loop = () => {
                         if (!this.detectionActive) return;
                         const now = performance.now();
-                        const minIntervalMs = 1000 / CONFIG.DETECTION.TARGET_FPS;
+                        const minIntervalMs = 1000 / (this.dynamicTargetFps || CONFIG.DETECTION.TARGET_FPS);
                         if (now - this.lastDetectionTime >= minIntervalMs && !this.inFlightDetection) {
                             this.detectInCurrentFrame();
                             this.lastDetectionTime = now;
@@ -831,6 +840,7 @@ function athenaApp() {
                             this.updateRealtimeStats();
                             this.drawDetections();
                             if (this.wsLastSendAt) { this.wsRTTms = Math.round(performance.now() - this.wsLastSendAt); }
+                            this.adaptNetwork();
                             const s = Math.floor(performance.now() / 1000);
                             if (s !== this.lastFpsTick) { this.detectionFPS = this.framesThisSecond; this.framesThisSecond = 0; this.lastFpsTick = s; } else { this.framesThisSecond += 1; }
                             this.inFlightDetection = false;
@@ -884,12 +894,35 @@ function athenaApp() {
                     } catch (_) {
                         this.inFlightDetection = false;
                     }
-                }, 'image/jpeg', CONFIG.DETECTION.JPEG_QUALITY || 0.6);
+                }, 'image/jpeg', (this.dynamicJpegQuality || CONFIG.DETECTION.JPEG_QUALITY || 0.6));
                 
             } catch (error) {
                 console.error('Erro na detecção:', error);
                 this.inFlightDetection = false;
             }
+        },
+
+        // Ajuste adaptativo simples
+        adaptNetwork() {
+            const rtt = this.wsRTTms || 0;
+            if (rtt > 500) {
+                this.dynamicTargetFps = Math.max(1, (this.dynamicTargetFps || 2) - 1);
+                this.dynamicJpegQuality = Math.max(0.4, (this.dynamicJpegQuality || 0.5) - 0.05);
+            } else if (rtt < 180) {
+                this.dynamicTargetFps = Math.min(6, (this.dynamicTargetFps || 2) + 1);
+                this.dynamicJpegQuality = Math.min(0.75, (this.dynamicJpegQuality || 0.5) + 0.05);
+            }
+        },
+
+        async toggleFullscreen() {
+            const container = document.getElementById('videoContainer');
+            if (!container) return;
+            if (document.fullscreenElement) {
+                await document.exitFullscreen();
+            } else {
+                await container.requestFullscreen();
+            }
+            this.resizeOverlayToVideo();
         },
 
         // Atualizar estatísticas em tempo real

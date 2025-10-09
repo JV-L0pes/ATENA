@@ -354,11 +354,25 @@ class AthenaRealtimeDetector:
             return detections, []
 
         persons: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') == 'person']
-        # EPIs considerados para compliance = interseção entre requeridos e habilitados
-        active_required = self.required_epis.intersection(self.enabled_classes)
-        epis: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') in active_required]
+        # Mapear EPIs do modelo para nomes "lógicos" de compliance
+        epi_alias = {
+            'helmet': 'helmet',
+            'safety-vest': 'safety-vest',
+            'gloves': 'gloves',
+            'glasses': 'glasses',
+            'ear-mufs': 'ear-plugs'  # proteção auricular
+        }
+        # EPIs considerados = interseção entre requeridos e habilitados (usando alias)
+        active_required = set()
+        for raw, alias in epi_alias.items():
+            if alias in self.required_epis and raw in self.enabled_classes:
+                active_required.add(alias)
+        # Detecções positivas de EPIs (originais)
+        epis_raw: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') in epi_alias.keys()]
+        # Suportes anatômicos
         supports_head: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') in ('head', 'face')]
         supports_hands: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') == 'hands']
+        supports_ears: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') == 'ear']
 
         def bbox_center(b):
             x1, y1, x2, y2 = b
@@ -404,22 +418,38 @@ class AthenaRealtimeDetector:
             top_region_y = py1 + int(0.35 * ph)
             present = set()
 
-            for epi in epis:
-                c = bbox_center(epi['bbox'])
-                if not center_inside(c, person['bbox']):
+            # Associação por IoU para EPIs positivos
+            person_box = person['bbox']
+            # capacete e óculos: exigir sobreposição com região da cabeça
+            for epi in epis_raw:
+                raw_name = epi['class_name']
+                alias = epi_alias.get(raw_name)
+                if alias is None:
                     continue
-                ename = epi['class_name']
-                # Regras rápidas por região
-                if ename == 'helmet':
+                c = bbox_center(epi['bbox'])
+                if not center_inside(c, person_box):
+                    continue
+                if raw_name in ('helmet', 'glasses'):
+                    # precisa estar na região superior da pessoa
                     if c[1] <= top_region_y:
-                        present.add('helmet')
-                elif ename == 'glasses':
-                    if c[1] <= top_region_y:
-                        present.add('glasses')
-                elif ename == 'safety-vest':
-                    present.add('safety-vest')
-                elif ename == 'gloves':
-                    present.add('gloves')
+                        present.add(alias)
+                elif raw_name == 'safety-vest':
+                    present.add(alias)
+                elif raw_name == 'gloves':
+                    # Só conta "gloves" se cobrir uma mão detectada (evita falsos positivos no tronco)
+                    matched = False
+                    for h in supports_hands:
+                        if center_inside(bbox_center(h['bbox']), person_box) and iou(epi['bbox'], h['bbox']) > 0.3:
+                            matched = True
+                            break
+                    if matched:
+                        present.add('gloves')
+                elif raw_name == 'ear-mufs':
+                    # precisa cobrir uma orelha
+                    for earb in supports_ears:
+                        if center_inside(bbox_center(earb['bbox']), person_box) and iou(epi['bbox'], earb['bbox']) > 0.2:
+                            present.add('ear-plugs')
+                            break
 
             missing = [e for e in active_required if e not in present]
             person['missing_epis'] = missing
@@ -434,9 +464,9 @@ class AthenaRealtimeDetector:
                     'missing_epis': missing
                 })
 
-                # Criar detecções virtuais "missing-*" com ROIs específicas por EPI ausente
+            # Criar detecções virtuais "missing-*" com ROIs específicas por EPI ausente
                 for m in missing:
-                    if m == 'helmet':
+                if m == 'helmet':
                         support = find_support_in(person['bbox'], supports_head)
                         if support is not None:
                             vx1, vy1, vx2, vy2 = support['bbox']
@@ -455,7 +485,7 @@ class AthenaRealtimeDetector:
                             'frame_id': self.frame_count,
                             'timestamp': time.time()
                         })
-                    elif m == 'glasses':
+                elif m == 'glasses':
                         support = find_support_in(person['bbox'], supports_head)
                         if support is not None:
                             sx1, sy1, sx2, sy2 = support['bbox']
@@ -479,7 +509,7 @@ class AthenaRealtimeDetector:
                             'frame_id': self.frame_count,
                             'timestamp': time.time()
                         })
-                    elif m == 'safety-vest':
+                elif m == 'safety-vest':
                         vy1 = py1 + int(0.35 * ph)
                         vy2 = py1 + int(0.75 * ph)
                         vx1 = px1 + int(0.15 * (px2 - px1))
@@ -493,15 +523,17 @@ class AthenaRealtimeDetector:
                             'frame_id': self.frame_count,
                             'timestamp': time.time()
                         })
-                    elif m == 'gloves':
-                        # Preferir ROIs de mãos detectadas
-                        matched_hands = []
-                        for h in supports_hands:
-                            c = bbox_center(h['bbox'])
-                            if center_inside(c, person['bbox']):
-                                matched_hands.append(h['bbox'])
-                        if matched_hands:
-                            for hb in matched_hands:
+                elif m == 'gloves':
+                    # Gerar ausências por mão detectada sem luva sobreposta
+                    hands_in_person = [h['bbox'] for h in supports_hands if center_inside(bbox_center(h['bbox']), person_box)]
+                    if hands_in_person:
+                        for hb in hands_in_person:
+                            has_glove = False
+                            for epi in epis_raw:
+                                if epi['class_name'] == 'gloves' and iou(epi['bbox'], hb) > 0.3:
+                                    has_glove = True
+                                    break
+                            if not has_glove:
                                 vx1, vy1, vx2, vy2 = hb
                                 roi = clip_box(vx1, vy1, vx2, vy2)
                                 virtual_missing_detections.append({
@@ -512,31 +544,22 @@ class AthenaRealtimeDetector:
                                     'frame_id': self.frame_count,
                                     'timestamp': time.time()
                                 })
-                        else:
-                            # fallback: duas regiões inferiores laterais
-                            bw = px2 - px1
-                            vy1 = py2 - int(0.25 * ph)
-                            vy2 = py2 - int(0.05 * ph)
-                            # esquerda
-                            vx1 = px1 + int(0.05 * bw)
-                            vx2 = px1 + int(0.35 * bw)
-                            roi_l = clip_box(vx1, vy1, vx2, vy2)
+                elif m == 'ear-plugs':
+                    # Para cada orelha visível sem proteção
+                    ears_in_person = [e['bbox'] for e in supports_ears if center_inside(bbox_center(e['bbox']), person_box)]
+                    for eb in ears_in_person:
+                        has_protect = False
+                        for epi in epis_raw:
+                            if epi['class_name'] == 'ear-mufs' and iou(epi['bbox'], eb) > 0.2:
+                                has_protect = True
+                                break
+                        if not has_protect:
+                            vx1, vy1, vx2, vy2 = eb
+                            roi = clip_box(vx1, vy1, vx2, vy2)
                             virtual_missing_detections.append({
-                                'bbox': roi_l,
+                                'bbox': roi,
                                 'confidence': 1.0,
-                                'class_name': 'missing-gloves',
-                                'class_id': -1,
-                                'frame_id': self.frame_count,
-                                'timestamp': time.time()
-                            })
-                            # direita
-                            vx1 = px2 - int(0.35 * bw)
-                            vx2 = px2 - int(0.05 * bw)
-                            roi_r = clip_box(vx1, vy1, vx2, vy2)
-                            virtual_missing_detections.append({
-                                'bbox': roi_r,
-                                'confidence': 1.0,
-                                'class_name': 'missing-gloves',
+                                'class_name': 'missing-ear-plugs',
                                 'class_id': -1,
                                 'frame_id': self.frame_count,
                                 'timestamp': time.time()
