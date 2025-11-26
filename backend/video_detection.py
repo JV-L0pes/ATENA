@@ -51,17 +51,14 @@ class VideoAIDetector:
         logger.info(f"Video AI Detector inicializado com threshold {confidence_threshold}")
     
     def _get_latest_model(self) -> str:
-        """Obtém o modelo mais recente disponível"""
-        model_paths = [
-            "athena_model_latest.pt",
-            "athena_training_2phase_optimized/models/phase1_complete/athena_phase1_tesla_t4/weights/best.pt"
-        ]
+        """Obtém o modelo best.pt da Fase 1"""
+        from backend.config import CONFIG
+        model_path = CONFIG.MODEL_PATH
         
-        for path in model_paths:
-            if Path(path).exists():
-                return path
+        if not Path(model_path).exists():
+            raise FileNotFoundError(f"Modelo não encontrado: {model_path}")
         
-        raise FileNotFoundError("Nenhum modelo encontrado")
+        return model_path
     
     def load_model(self) -> bool:
         """Carrega o modelo YOLOv11"""

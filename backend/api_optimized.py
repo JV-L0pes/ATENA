@@ -57,22 +57,31 @@ class EPIDetectorOptimizedAPI:
     """Detector de EPIs com modelo otimizado da Fase 1 - Performance Superior"""
     
     def __init__(self, model_path: str = None, video_source: str = None):
-        # Usar modelo mais recente se existir
+        # Usar modelo best.pt da Fase 1 como padrão
         if model_path is None:
-            latest = Path("athena_model_latest.pt")
-            if latest.exists():
-                model_path = str(latest)
-            else:
-                model_path = "athena_training_2phase_optimized/models/phase1_complete/athena_phase1_tesla_t4/weights/best.pt"
+            from backend.config import CONFIG
+            model_path = CONFIG.MODEL_PATH
         
         self.model_path = model_path
-        self.video_source = video_source or os.getenv("RTSP_URL", "0")
+        # Usar configuração do config.py se não especificado
+        from backend.config import CONFIG
+        self.video_source = video_source or CONFIG.RTSP_URL
         self.detector = None
         self.is_initialized = False
         
-        # Configuração de câmera
-        self.camera_type = "usb"
-        self.camera_source = 0
+        # Configuração de câmera - detectar automaticamente tipo baseado na URL
+        if self.video_source.startswith("rtsp://"):
+            self.camera_type = "rtsp"
+            self.camera_source = self.video_source
+        elif self.video_source.startswith("http://"):
+            self.camera_type = "http"
+            self.camera_source = self.video_source
+        elif self.video_source.startswith("udp://"):
+            self.camera_type = "udp"
+            self.camera_source = self.video_source
+        else:
+            self.camera_type = "usb"
+            self.camera_source = int(self.video_source) if self.video_source.isdigit() else 0
         
         # Sistema de recuperação de webcam
         self.webcam_capture = None
@@ -161,16 +170,43 @@ class EPIDetectorOptimizedAPI:
                 self.camera_source = self.video_source
                 logging.info(f"📹 Configurando RTSP: {self.camera_source}")
                 
-                # Testar conexão RTSP
-                cap = cv2.VideoCapture(self.camera_source)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Buffer mínimo para baixa latência
+                # Testar conexão RTSP com configurações otimizadas
+                logging.info(f"🔗 Tentando conectar RTSP: {self.camera_source}")
+                cap = cv2.VideoCapture(self.camera_source, cv2.CAP_FFMPEG)
+                
+                # CONFIGURAÇÕES ANTI-H.264 ERRORS - Zero erros de decodificação
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Buffer mínimo para evitar lag
+                
+                # FORÇAR CODEC MJPEG - Mais estável que H.264
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+                
+                # CONFIGURAÇÕES ANTI-ERRO H.264
+                cap.set(cv2.CAP_PROP_CONVERT_RGB, 1)  # Forçar conversão RGB
+                cap.set(cv2.CAP_PROP_FRAME_COUNT, -1)  # Stream infinito
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Resetar posição
+                
+                # REDUZIR QUALIDADE PARA ESTABILIDADE
+                cap.set(cv2.CAP_PROP_FPS, 10)  # FPS muito baixo para estabilidade
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # Resolução reduzida
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                
+                # Configurações adicionais para estabilidade
+                cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)  # Desabilitar autofoco
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # Exposição fixa
                 
                 if not cap.isOpened():
-                    logging.warning(f"⚠️ RTSP não disponível ainda: {self.camera_source}")
-                    logging.info("💡 Configure o ffmpeg no PC local para iniciar o stream")
-                    # Não falhar aqui - o RTSP pode não estar ativo ainda
+                    logging.warning(f"⚠️ RTSP não conseguiu abrir: {self.camera_source}")
+                    logging.info("💡 Verifique se a câmera está ligada e acessível")
                     cap.release()
                     return True  # Permitir que o sistema inicie
+                
+                # Testar se consegue ler um frame
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    h, w = frame.shape[:2]
+                    logging.info(f"✅ RTSP conectado - Frame recebido: {w}x{h}")
+                else:
+                    logging.warning(f"⚠️ RTSP conectado mas sem frames válidos")
                 
                 cap.release()
                 logging.info(f"✅ RTSP configurado: {self.camera_source}")
@@ -182,7 +218,7 @@ class EPIDetectorOptimizedAPI:
                 logging.info(f"📹 Configurando UDP: {self.camera_source}")
                 
                 # Testar conexão UDP
-                cap = cv2.VideoCapture(self.camera_source)
+                cap = cv2.VideoCapture(self.camera_source, cv2.CAP_FFMPEG)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Buffer mínimo para baixa latência
                 
                 if not cap.isOpened():
@@ -202,7 +238,7 @@ class EPIDetectorOptimizedAPI:
                 logging.info(f"📹 Configurando HTTP: {self.camera_source}")
                 
                 # Testar conexão HTTP
-                cap = cv2.VideoCapture(self.camera_source)
+                cap = cv2.VideoCapture(self.camera_source, cv2.CAP_FFMPEG)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Buffer mínimo para baixa latência
                 
                 if not cap.isOpened():
@@ -223,7 +259,7 @@ class EPIDetectorOptimizedAPI:
                     return False
                 
                 # Testar conexão IP (permissivo)
-                cap = cv2.VideoCapture(self.camera_source)
+                cap = cv2.VideoCapture(self.camera_source, cv2.CAP_FFMPEG)
                 if not cap.isOpened():
                     logging.warning(f"⚠️ Falha ao conectar câmera IP: {self.camera_source}")
                     logging.info("💡 Funcionalidade de análise de vídeos permanece disponível")
@@ -264,18 +300,40 @@ class EPIDetectorOptimizedAPI:
         """Captura frame atual usando sistema de recuperação ou HTTP/RTSP"""
         # Se for HTTP/RTSP/UDP, usar VideoCapture diretamente
         if self.camera_type in ["http", "rtsp", "udp"]:
-            cap = cv2.VideoCapture(self.camera_source)
+            cap = cv2.VideoCapture(self.camera_source, cv2.CAP_FFMPEG)
             if cap.isOpened():
-                # Configurações para RTSP
+                # CONFIGURAÇÕES ANTI-H.264 ERRORS para RTSP - Zero erros de decodificação
                 if self.camera_type == "rtsp":
-                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('H', '2', '6', '4'))
-                    cap.set(cv2.CAP_PROP_CONVERT_RGB, 1)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Buffer mínimo para evitar lag
+                    
+                    # FORÇAR CODEC MJPEG - Mais estável que H.264
+                    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+                    
+                    # CONFIGURAÇÕES ANTI-ERRO H.264
+                    cap.set(cv2.CAP_PROP_CONVERT_RGB, 1)  # Forçar conversão RGB
+                    cap.set(cv2.CAP_PROP_FRAME_COUNT, -1)  # Stream infinito
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Resetar posição
+                    
+                    # REDUZIR QUALIDADE PARA ESTABILIDADE
+                    cap.set(cv2.CAP_PROP_FPS, 10)  # FPS muito baixo para estabilidade
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # Resolução reduzida
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    
+                    # Configurações adicionais para estabilidade
+                    cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)  # Desabilitar autofoco
+                    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # Exposição fixa
                 
                 ret, frame = cap.read()
                 cap.release()
                 if ret and frame is not None:
-                    return frame
+                    # VERIFICAR SE FRAME ESTÁ CORROMPIDO (anti-H.264 errors)
+                    if frame.shape[0] > 0 and frame.shape[1] > 0:
+                        return frame
+                    else:
+                        logging.warning("⚠️ Frame corrompido detectado - ignorando")
+                        return None
+                else:
+                    logging.warning(f"⚠️ Falha ao capturar frame do {self.camera_type}")
         
         # Fallback para sistema de recuperação
         if self.webcam_capture and self.webcam_capture.is_initialized:
@@ -294,6 +352,13 @@ class EPIDetectorOptimizedAPI:
         try:
             # Processar frame com detector otimizado
             results = self.detector.process_frame(frame)
+            
+            # DEBUG: Log das detecções brutas do modelo (reduzido para estabilidade)
+            raw_detections = results.get('detections', [])
+            if self.frame_count % 180 == 0:  # Log a cada 180 frames (1 vez a cada 3 segundos)
+                logging.info(f"🔍 DEBUG - Detecções brutas do modelo: {len(raw_detections)}")
+                for i, det in enumerate(raw_detections[:2]):  # Mostrar apenas as 2 primeiras
+                    logging.info(f"  Detecção {i}: {det.get('class_name', 'unknown')} - conf: {det.get('confidence', 0):.2f}")
             
             # Atualizar estado
             self.current_frame = frame.copy()
@@ -322,57 +387,104 @@ class EPIDetectorOptimizedAPI:
             return {"detections": [], "stats": self.stats}
     
     def _update_stats(self, results: Dict[str, Any]):
-        """Atualiza estatísticas baseadas nos resultados"""
+        """Atualiza estatísticas baseadas nos resultados - FOCO APENAS NO CAPACETE"""
         detections = results.get('detections', [])
         summary = results.get('summary', {})
         
         # Mapear classes do modelo da Fase 1 para classes do sistema
         class_mapping = {
             'hardhat': 'helmet',
-            'safety_vest': 'vest',
+            'helmet': 'helmet',
             'person': 'person',
-            'no-helmet': 'no-helmet',
-            'no-vest': 'no-vest'
+            'no-helmet': 'no-helmet'
         }
         
-        # Reset contadores
+        # Reset contadores - FOCO APENAS NO CAPACETE
         self.stats.update({
             "com_capacete": 0,
             "sem_capacete": 0,
-            "com_colete": 0,
-            "sem_colete": 0,
+            "com_colete": 0,  # Manter para compatibilidade
+            "sem_colete": 0,  # Manter para compatibilidade
             "total_pessoas": 0
         })
         
-        # Contar detecções por classe
+        # Processar detecções e adicionar lógica de EPIs faltando
+        processed_detections = []
+        people_detections = []
+        
         for detection in detections:
             class_name = detection.get('class_name', '')
             mapped_class = class_mapping.get(class_name, class_name)
             
+            # Adicionar lógica de compliance e missing_epis
+            detection_copy = detection.copy()
+            
             if mapped_class == 'helmet':
                 self.stats["com_capacete"] += 1
+                detection_copy['compliant'] = True
+                detection_copy['missing_epis'] = []
             elif mapped_class == 'no-helmet':
                 self.stats["sem_capacete"] += 1
-            elif mapped_class == 'vest':
-                self.stats["com_colete"] += 1
-            elif mapped_class == 'no-vest':
-                self.stats["sem_colete"] += 1
+                detection_copy['compliant'] = False
+                detection_copy['missing_epis'] = ['helmet']
             elif mapped_class == 'person':
                 self.stats["total_pessoas"] += 1
+                people_detections.append(detection_copy)
+                # Para pessoas, vamos analisar EPIs faltando baseado em outras detecções
+                detection_copy['missing_epis'] = self._analyze_missing_epis_for_person(detection_copy, detections)
+                detection_copy['compliant'] = len(detection_copy['missing_epis']) == 0
+            else:
+                # Outras classes (face, hands, etc.)
+                detection_copy['compliant'] = True
+                detection_copy['missing_epis'] = []
+            
+            processed_detections.append(detection_copy)
         
-        # Calcular métricas avançadas
+        # Atualizar detecções processadas
+        self.current_detections = processed_detections
+        
+        # Calcular métricas avançadas - FOCO APENAS NO CAPACETE
         total_people = self.stats["total_pessoas"]
         if total_people > 0:
             compliant_helmets = self.stats["com_capacete"]
-            compliant_vests = self.stats["com_colete"]
-            total_epis = total_people * 2  # capacete + colete
-            
-            self.stats["compliance_score"] = (compliant_helmets + compliant_vests) / total_epis
+            # Para simplificar, considerar apenas capacete
+            self.stats["compliance_score"] = compliant_helmets / total_people
             self.stats["detection_rate"] = len(detections) / max(1, total_people)
             
             # Confiança média
             confidences = [d.get('confidence', 0.0) for d in detections]
             self.stats["avg_confidence"] = np.mean(confidences) if confidences else 0.0
+    
+    def _analyze_missing_epis_for_person(self, person_detection: Dict, all_detections: List[Dict]) -> List[str]:
+        """Analisa quais EPIs estão faltando para uma pessoa específica - FOCO APENAS NO CAPACETE"""
+        missing_epis = []
+        
+        # Obter bounding box da pessoa
+        person_bbox = person_detection.get('bbox', [])
+        if len(person_bbox) < 4:
+            return ['helmet']  # Se não conseguir analisar, assumir que falta capacete
+        
+        # Verificar se há capacete próximo à pessoa
+        has_helmet = False
+        
+        for detection in all_detections:
+            class_name = detection.get('class_name', '')
+            bbox = detection.get('bbox', [])
+            
+            if len(bbox) < 4:
+                continue
+            
+            # Verificar se a detecção está próxima à pessoa (overlap ou proximidade)
+            if self._boxes_overlap_or_near(person_bbox, bbox):
+                if class_name in ['helmet', 'hardhat']:
+                    has_helmet = True
+                    break  # Encontrou capacete, pode parar
+        
+        # Adicionar EPI faltando apenas se não encontrou capacete
+        if not has_helmet:
+            missing_epis.append('helmet')
+            
+        return missing_epis
     
     def get_current_detections(self) -> List[Dict]:
         """Retorna detecções atuais"""
@@ -427,6 +539,40 @@ class EPIDetectorOptimizedAPI:
         """Para sistema"""
         if self.detector:
             self.detector.cleanup()
+    
+    # Métodos para compatibilidade com sistema de classes
+    def get_enabled_classes(self):
+        """Retorna classes habilitadas"""
+        if self.detector and hasattr(self.detector, 'get_enabled_classes'):
+            return self.detector.get_enabled_classes()
+        else:
+            # Fallback para classes padrão
+            return [
+                'person', 'ear', 'ear-mufs', 'face', 'face-guard', 'face-mask-medical', 
+                'foot', 'tools', 'glasses', 'gloves', 'helmet', 'hands', 'head', 
+                'medical-suit', 'shoes', 'safety-suit', 'safety-vest'
+            ]
+    
+    def set_enabled_classes(self, enabled_classes):
+        """Define classes habilitadas"""
+        if self.detector and hasattr(self.detector, 'set_enabled_classes'):
+            return self.detector.set_enabled_classes(enabled_classes)
+        else:
+            logging.warning("⚠️ Detector não suporta atualização de classes")
+            return False
+    
+    @property
+    def class_names(self):
+        """Retorna nomes das classes"""
+        if self.detector and hasattr(self.detector, 'class_names'):
+            return self.detector.class_names
+        else:
+            # Fallback para classes padrão
+            return [
+                'person', 'ear', 'ear-mufs', 'face', 'face-guard', 'face-mask-medical', 
+                'foot', 'tools', 'glasses', 'gloves', 'helmet', 'hands', 'head', 
+                'medical-suit', 'shoes', 'safety-suit', 'safety-vest'
+            ]
 
 # ===== CONTINUAÇÃO DA API =====
 
@@ -582,11 +728,11 @@ async def startup_event():
             raise Exception("Configurações inválidas")
         
         # ===== INICIALIZAÇÃO SISTEMA OTIMIZADO =====
-        app_state.detection_system = EPIDetectorOptimizedAPI(video_source=os.getenv("RTSP_URL", "0"))
+        app_state.detection_system = EPIDetectorOptimizedAPI(video_source=CONFIG.RTSP_URL)
         
-        # Configurar câmera baseado nas variáveis de ambiente RTSP
-        video_type = os.getenv("VIDEO_TYPE", "usb")
-        rtsp_url = os.getenv("RTSP_URL", "0")
+        # Configurar câmera baseado na configuração do CONFIG
+        video_type = CONFIG.VIDEO_TYPE
+        rtsp_url = CONFIG.RTSP_URL
         
         if video_type == "rtsp" and rtsp_url.startswith("rtsp://"):
             app_state.detection_system.camera_type = "rtsp"
@@ -596,9 +742,8 @@ async def startup_event():
             # Testar conexão RTSP de forma não bloqueante
             try:
                 import cv2
-                cap = cv2.VideoCapture(rtsp_url)
+                cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                cap.set(cv2.CAP_PROP_TIMEOUT, 5000)  # Timeout de 5 segundos
                 
                 if cap.isOpened():
                     ret, frame = cap.read()
@@ -730,6 +875,7 @@ async def get_model_classes():
         }
     else:
         # Fallback para classes padrão do modelo best.pt
+        from backend.config import CONFIG
         return {
             "class_names": [
                 'person', 'ear', 'ear-mufs', 'face', 'face-guard', 'face-mask-medical', 
@@ -737,7 +883,7 @@ async def get_model_classes():
                 'medical-suit', 'shoes', 'safety-suit', 'safety-vest'
             ],
             "total_classes": 17,
-            "model_path": "athena_training_2phase_optimized/models/phase1_complete/athena_phase1_tesla_t4/weights/best.pt"
+            "model_path": CONFIG.MODEL_PATH
         }
 
 @app.get("/classes/enabled")
@@ -766,12 +912,15 @@ async def update_enabled_classes(payload: ClassesUpdate):
 
 @app.get("/stream.mjpg")
 async def video_stream():
-    """Stream MJPEG com detecções desenhadas"""
+    """Stream MJPEG OTIMIZADO para alta performance"""
     if not app_state.detection_system:
         raise HTTPException(status_code=503, detail="Sistema de detecção não inicializado")
     
     async def generate_frames():
         cap = None
+        frame_count = 0
+        last_detection_time = 0
+        
         try:
             # Usar sistema de recuperação se disponível
             logging.info(f"🔍 Debug: webcam_capture = {app_state.detection_system.webcam_capture}")
@@ -780,41 +929,75 @@ async def video_stream():
             if (app_state.detection_system.webcam_capture and 
                 app_state.detection_system.camera_type == "usb"):
                 
-                logging.info("🔄 Usando sistema de recuperação para stream")
+                logging.info("🔄 Usando sistema de recuperação para stream OTIMIZADO")
                 
                 while True:
                     # Capturar frame usando sistema de recuperação
                     frame = app_state.detection_system.get_current_frame_from_webcam()
                     if frame is not None:
-                        # Processar frame com sistema otimizado
-                        results = app_state.detection_system.process_frame(frame)
-                        processed_frame = results.get('processed_frame', frame)
+                        frame_count += 1
                         
-                        # Codificar frame cru para reduzir latência
-                        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                        # OTIMIZAÇÃO: Processar detecção apenas ocasionalmente para estabilidade máxima
+                        current_time = time.time()
+                        should_process_detection = (current_time - last_detection_time) > (1.0 / 3)  # 3 FPS para detecção (ultra estável)
+                        
+                        if should_process_detection:
+                            # Processar frame com sistema otimizado (assíncrono)
+                            results = app_state.detection_system.process_frame(frame)
+                            last_detection_time = current_time
+                        
+                        # OTIMIZAÇÃO: Redimensionar frame 2K para processamento mais rápido
+                        if frame.shape[1] > 1280:  # Se largura > 1280px (2K)
+                            height, width = frame.shape[:2]
+                            new_width = 1280
+                            new_height = int((height * new_width) / width)
+                            frame_resized = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+                        else:
+                            frame_resized = frame
+                        
+                        # OTIMIZAÇÃO: Codificar frame com qualidade ULTRA reduzida para estabilidade máxima
+                        _, buffer = cv2.imencode('.jpg', frame_resized, [
+                            cv2.IMWRITE_JPEG_QUALITY, 30,  # Qualidade muito baixa para estabilidade
+                            cv2.IMWRITE_JPEG_OPTIMIZE, 1
+                        ])
                         frame_bytes = buffer.tobytes()
                         
                         yield (b'--frame\r\n'
                                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                        
+                        # OTIMIZAÇÃO: Sleep reduzido para maior FPS
+                        await asyncio.sleep(1/CONFIG.VIDEO_FPS)  # Usar FPS configurado
                     else:
-                        await asyncio.sleep(0.033)  # ~30 FPS
+                        await asyncio.sleep(0.016)  # ~60 FPS quando sem frame
                         
             else:
                 # Fallback para método tradicional
                 if app_state.detection_system.camera_type == "ip":
                     cap = cv2.VideoCapture(app_state.detection_system.camera_source)
                 elif app_state.detection_system.camera_type in ["rtsp", "http", "udp"]:
-                    cap = cv2.VideoCapture(app_state.detection_system.camera_source)
-                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Buffer mínimo para baixa latência
+                    cap = cv2.VideoCapture(app_state.detection_system.camera_source, cv2.CAP_FFMPEG)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, CONFIG.STREAM_BUFFER_SIZE)  # Buffer mínimo para baixa latência
                     
-                    # Configurações específicas para RTSP/HTTP/UDP
+                    # CONFIGURAÇÕES ANTI-H.264 ERRORS para RTSP - Zero erros de decodificação
                     if app_state.detection_system.camera_type == "rtsp":
-                        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('H', '2', '6', '4'))
-                        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-                        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-                        cap.set(cv2.CAP_PROP_FPS, 30)
-                        # Configurações para lidar com erros H.264
-                        cap.set(cv2.CAP_PROP_CONVERT_RGB, 1)
+                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Buffer mínimo para evitar lag
+                        
+                        # FORÇAR CODEC MJPEG - Mais estável que H.264
+                        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+                        
+                        # CONFIGURAÇÕES ANTI-ERRO H.264
+                        cap.set(cv2.CAP_PROP_CONVERT_RGB, 1)  # Forçar conversão RGB
+                        cap.set(cv2.CAP_PROP_FRAME_COUNT, -1)  # Stream infinito
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Resetar posição
+                        
+                        # REDUZIR QUALIDADE PARA ESTABILIDADE
+                        cap.set(cv2.CAP_PROP_FPS, 10)  # FPS muito baixo para estabilidade
+                        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)  # Resolução reduzida
+                        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                        
+                        # Configurações adicionais para estabilidade
+                        cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)  # Desabilitar autofoco
+                        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # Exposição fixa
                 else:
                     cap = cv2.VideoCapture(app_state.detection_system.camera_source)
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
@@ -826,13 +1009,43 @@ async def video_stream():
                 
                 while True:
                     ret, frame = cap.read()
-                    if ret:
-                        # Processar frame com sistema otimizado
-                        results = app_state.detection_system.process_frame(frame)
-                        processed_frame = results.get('processed_frame', frame)
+                    if ret and frame is not None:
+                        # VERIFICAR SE FRAME ESTÁ CORROMPIDO (anti-H.264 errors)
+                        if frame.shape[0] > 0 and frame.shape[1] > 0:
+                            frame_count += 1
+                        else:
+                            logging.warning("⚠️ Frame corrompido detectado - ignorando")
+                            continue
                         
-                        # Converter frame cru (sem desenho) para reduzir latência de stream
-                        frame_bytes = encode_frame_jpeg(frame, 70)
+                        # OTIMIZAÇÃO: Processar detecção apenas ocasionalmente para estabilidade máxima
+                        current_time = time.time()
+                        should_process_detection = (current_time - last_detection_time) > (1.0 / 3)  # 3 FPS para detecção (ultra estável)
+                        
+                        if should_process_detection:
+                            # OTIMIZAÇÃO: Redimensionar frame 2K para detecção mais rápida
+                            if frame.shape[1] > 1280:  # Se largura > 1280px (2K)
+                                height, width = frame.shape[:2]
+                                new_width = 1280
+                                new_height = int((height * new_width) / width)
+                                frame_for_detection = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+                            else:
+                                frame_for_detection = frame
+                            
+                            # Processar frame com sistema otimizado (assíncrono)
+                            results = app_state.detection_system.process_frame(frame_for_detection)
+                            last_detection_time = current_time
+                        
+                        # OTIMIZAÇÃO: Redimensionar frame 2K para stream mais rápido
+                        if frame.shape[1] > 1280:  # Se largura > 1280px (2K)
+                            height, width = frame.shape[:2]
+                            new_width = 1280
+                            new_height = int((height * new_width) / width)
+                            frame_for_stream = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+                        else:
+                            frame_for_stream = frame
+                        
+                        # OTIMIZAÇÃO: Codificar com qualidade reduzida para velocidade
+                        frame_bytes = encode_frame_jpeg(frame_for_stream, 30)  # Qualidade ultra baixa
                         
                         # Enviar frame MJPEG
                         yield (
@@ -840,7 +1053,7 @@ async def video_stream():
                             b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
                         )
                     
-                    # Controlar FPS
+                    # OTIMIZAÇÃO: Sleep reduzido para maior FPS
                     await asyncio.sleep(1/CONFIG.VIDEO_FPS)
                 
         except Exception as e:
@@ -935,8 +1148,8 @@ async def sse_detections():
                     }
                     yield f"data: {json.dumps(event_data)}\n\n"
                 
-                # Aguardar próximo evento (10 FPS)
-                await asyncio.sleep(0.1)
+                # OTIMIZAÇÃO: Aguardar próximo evento (5 FPS para estabilidade máxima)
+                await asyncio.sleep(0.2)  # ~5 FPS para estabilidade
                 
         except Exception as e:
             logger.error(f"❌ Erro no SSE: {e}")

@@ -56,6 +56,14 @@ class AthenaRealtimeDetector:
             'batch_size': 1,        # Processar 1 frame por vez
             'warmup_frames': 5       # Frames de aquecimento
         }
+        # Limiares por classe (podem ser ajustados por env futuramente)
+        self.class_thresholds: Dict[str, float] = {
+            'helmet': 0.55,
+            'glasses': 0.60,
+            'safety-vest': 0.50,
+            'gloves': 0.60,
+            'ear-mufs': 0.60,
+        }
         
         # EPIs requeridos (configurável via env: REQUIRED_EPIS=helmet,safety-vest,gloves,glasses)
         required_epis_env = os.getenv("REQUIRED_EPIS", "helmet,safety-vest,gloves,glasses")
@@ -82,6 +90,13 @@ class AthenaRealtimeDetector:
         self.frame_count = 0
         self.last_process_time = 0
         self.fps_counter = deque(maxlen=30)
+        # Suavização temporal de ausências por pessoa
+        self.temporal_params = {
+            'missing_frames_required': 3,   # K - confirmar ausência
+            'present_frames_clear': 2       # M - limpar ausência
+        }
+        # Contadores: chave = (person_key, epi_name)
+        self.missing_counters: Dict[Tuple[str, str], int] = {}
         
         # Threading otimizado
         self.frame_queue = Queue(maxsize=1)  # Fila mínima: sempre o frame mais novo
@@ -275,9 +290,9 @@ class AthenaRealtimeDetector:
                     if 0 <= int(cls) < len(self.class_names):
                         x1, y1, x2, y2 = box
                         class_name = self.class_names[int(cls)]
-                        
-                        # Filtrar por threshold e classes habilitadas
-                        if conf >= self.config['conf_threshold'] and class_name in self.enabled_classes:
+                        # Filtrar por threshold por classe e classes habilitadas
+                        thr = max(self.config['conf_threshold'], self.class_thresholds.get(class_name, 0.0))
+                        if conf >= thr and class_name in self.enabled_classes:
                             detection = {
                                 'bbox': [int(x1), int(y1), int(x2), int(y2)],
                                 'confidence': float(conf),
@@ -417,9 +432,9 @@ class AthenaRealtimeDetector:
             # região do topo para capacete/óculos
             top_region_y = py1 + int(0.35 * ph)
             present = set()
+            person_box = person['bbox']
 
             # Associação por IoU para EPIs positivos
-            person_box = person['bbox']
             # capacete e óculos: exigir sobreposição com região da cabeça
             for epi in epis_raw:
                 raw_name = epi['class_name']
@@ -450,8 +465,24 @@ class AthenaRealtimeDetector:
                         if center_inside(bbox_center(earb['bbox']), person_box) and iou(epi['bbox'], earb['bbox']) > 0.2:
                             present.add('ear-plugs')
                             break
+            # Equivalências: face-guard cobre glasses se sobrepor à cabeça
+            for fg in [d for d in detections if d.get('class_name') == 'face-guard']:
+                if center_inside(bbox_center(fg['bbox']), person_box):
+                    # requer suporte de cabeça visível
+                    if any(iou(fg['bbox'], s['bbox']) > 0.2 for s in supports_head):
+                        present.add('glasses')
 
-            missing = [e for e in active_required if e not in present]
+            # Gating por visibilidade: só considerar ausências se a região/suporte estiver visível
+            visible_requirements = set()
+            if any(center_inside(bbox_center(s['bbox']), person_box) for s in supports_head):
+                visible_requirements.update({'helmet', 'glasses'})
+            if any(center_inside(bbox_center(s['bbox']), person_box) for s in supports_hands):
+                visible_requirements.add('gloves')
+            if any(center_inside(bbox_center(s['bbox']), person_box) for s in supports_ears):
+                visible_requirements.add('ear-plugs')
+
+            gated_required = set(e for e in active_required if (e in visible_requirements) or (e == 'safety-vest'))
+            missing = [e for e in gated_required if e not in present]
             person['missing_epis'] = missing
             person['compliant'] = len(missing) == 0
             per_person_present.append({
@@ -465,7 +496,7 @@ class AthenaRealtimeDetector:
                 })
 
             # Criar detecções virtuais "missing-*" com ROIs específicas por EPI ausente
-                for m in missing:
+            for m in missing:
                 if m == 'helmet':
                         support = find_support_in(person['bbox'], supports_head)
                         if support is not None:
@@ -564,6 +595,41 @@ class AthenaRealtimeDetector:
                                 'frame_id': self.frame_count,
                                 'timestamp': time.time()
                             })
+
+        # Suavização temporal de ausências por pessoa (anti-flicker)
+        def person_key(box):
+            x1, y1, x2, y2 = box
+            cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
+            # quantizar para reduzir jitter
+            return f"{(cx//50)*50}:{(cy//50)*50}:{(x2-x1)//50}:{(y2-y1)//50}"
+
+        stabilized_missing = []
+        for p in persons:
+            key = person_key(p['bbox'])
+            miss = [m for m in p.get('missing_epis', [])]
+            # atualizar contadores
+            for epi in miss:
+                ck = (key, epi)
+                self.missing_counters[ck] = self.missing_counters.get(ck, 0) + 1
+                if self.missing_counters[ck] >= self.temporal_params['missing_frames_required']:
+                    stabilized_missing.append((key, epi))
+            # limpar quando presente
+            for epi in active_required:
+                if epi not in miss:
+                    ck = (key, epi)
+                    cval = self.missing_counters.get(ck, 0)
+                    if cval > 0:
+                        self.missing_counters[ck] = max(0, cval - self.temporal_params['present_frames_clear'])
+
+        # filtrar virtual_missing por estabilização
+        if stabilized_missing:
+            keep = []
+            for v in virtual_missing_detections:
+                k = person_key(v['bbox'])  # aproximação
+                epi_name = v.get('class_name', '').replace('missing-', '')
+                if (k, epi_name) in stabilized_missing:
+                    keep.append(v)
+            virtual_missing_detections = keep
 
         # Atualizar estatísticas agregadas
         self._update_compliance_stats(total_pessoas=len(persons), per_person=per_person_present)

@@ -27,21 +27,33 @@ class BackendConfig:
     
     # Configurações de vídeo - Suporte para HTTP via Tailscale
     VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "0")  # Padrão: webcam local
-    VIDEO_TYPE = os.getenv("VIDEO_TYPE", "usb")  # usb, ip, rtsp, udp, http
-    RTSP_URL = os.getenv("RTSP_URL", "http://100.67.254.55:8554/webcam")  # HTTP stream do PC local
-    VIDEO_FPS = int(os.getenv("VIDEO_FPS", "30"))
-    VIDEO_WIDTH = int(os.getenv("VIDEO_WIDTH", "640"))
+    VIDEO_TYPE = os.getenv("VIDEO_TYPE", "rtsp")  # usb, ip, rtsp, udp, http
+    RTSP_URL = os.getenv("RTSP_URL", "rtsp://admin:%40Lpha101@10.0.0.120:554/Streaming/Channels/101")  # RTSP da câmera IP
+    # Configurações de processamento de vídeo - MODO ALTA PERFORMANCE
+    VIDEO_FPS = int(os.getenv("VIDEO_FPS", "60"))  # Aumentado para 60 FPS
+    VIDEO_WIDTH = int(os.getenv("VIDEO_WIDTH", "640"))  # Resolução menor para performance
     VIDEO_HEIGHT = int(os.getenv("VIDEO_HEIGHT", "480"))
+    VIDEO_USE_GPU = os.getenv("VIDEO_USE_GPU", "true").lower() == "true"  # Usar GPU para processamento de vídeo
+    VIDEO_DECODE_THREADS = int(os.getenv("VIDEO_DECODE_THREADS", "8"))  # Mais threads para decodificação
+    
+    # Configurações de stream otimizado
+    STREAM_QUALITY = int(os.getenv("STREAM_QUALITY", "60"))  # Qualidade JPEG reduzida para velocidade
+    STREAM_BUFFER_SIZE = int(os.getenv("STREAM_BUFFER_SIZE", "1"))  # Buffer mínimo
+    STREAM_SKIP_FRAMES = int(os.getenv("STREAM_SKIP_FRAMES", "0"))  # Não pular frames
     
     # Configurações de detecção
     DETECTION_ENABLE_TRACKING = os.getenv("DETECTION_ENABLE_TRACKING", "true").lower() == "true"
     DETECTION_FRAME_QUEUE_SIZE = int(os.getenv("DETECTION_FRAME_QUEUE_SIZE", "10"))
     DETECTION_RESULT_QUEUE_SIZE = int(os.getenv("DETECTION_RESULT_QUEUE_SIZE", "10"))
     
-    # Configurações de performance
-    PERFORMANCE_MAX_DRAW_FPS = int(os.getenv("PERFORMANCE_MAX_DRAW_FPS", "30"))
-    PERFORMANCE_MAX_CACHE_SIZE = int(os.getenv("PERFORMANCE_MAX_CACHE_SIZE", "100"))
-    PERFORMANCE_DEBOUNCE_DELAY = int(os.getenv("PERFORMANCE_DEBOUNCE_DELAY", "100"))
+    # Configurações de performance - MODO ALTA PERFORMANCE
+    PERFORMANCE_MAX_DRAW_FPS = int(os.getenv("PERFORMANCE_MAX_DRAW_FPS", "60"))  # Aumentado para 60 FPS
+    PERFORMANCE_MAX_CACHE_SIZE = int(os.getenv("PERFORMANCE_MAX_CACHE_SIZE", "50"))  # Cache menor para menos latência
+    PERFORMANCE_DEBOUNCE_DELAY = int(os.getenv("PERFORMANCE_DEBOUNCE_DELAY", "16"))  # ~60 FPS (16ms)
+    
+    # Configurações de detecção otimizada
+    DETECTION_SKIP_FRAMES = int(os.getenv("DETECTION_SKIP_FRAMES", "1"))  # Processar 1 em 2 frames para velocidade
+    DETECTION_ASYNC_PROCESSING = os.getenv("DETECTION_ASYNC_PROCESSING", "true").lower() == "true"
     
     # Configurações de logging
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -110,22 +122,13 @@ class BackendConfig:
                 print(f"❌ Modelo não encontrado: {model_path}")
                 print(f"📁 Procurando por modelos treinados...")
                 
-                # Procurar por modelos treinados
-                train_dir = Path("yolov5/runs/train")
-                if train_dir.exists():
-                    for train_folder in train_dir.iterdir():
-                        if train_folder.is_dir():
-                            weights_dir = train_folder / "weights"
-                            if weights_dir.exists():
-                                best_model = weights_dir / "best.pt"
-                                if best_model.exists():
-                                    print(f"✅ Modelo encontrado: {best_model}")
-                                    # Atualizar caminho do modelo
-                                    cls.MODEL_PATH = str(best_model)
-                                    break
-                
-                if not Path(cls.MODEL_PATH).exists():
-                    print(f"❌ Nenhum modelo treinado encontrado")
+                # Procurar por modelos treinados no caminho padrão da Fase 1
+                default_model = Path("athena_training_2phase_optimized/models/phase1_complete/athena_phase1_tesla_t4/weights/best.pt")
+                if default_model.exists():
+                    print(f"✅ Modelo encontrado: {default_model}")
+                    cls.MODEL_PATH = str(default_model)
+                else:
+                    print(f"❌ Modelo padrão não encontrado: {default_model}")
                     return False
             
             # Verificar diretório de snapshots

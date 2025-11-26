@@ -294,7 +294,7 @@
                         <div class="ml-4">
                             <select x-model="detectionViewMode" class="bg-athena-deepBlue text-athena-cream border border-athena-gold/20 rounded px-2 py-1 text-sm">
                                 <option value="negatives">Apenas ausências</option>
-                                <option value="positives">Apenas positivos</option>
+                                <option value="positives">Apenas detecções</option>
                                 <option value="both">Ambos</option>
                             </select>
                         </div>
@@ -312,7 +312,7 @@
                     <div class="video-container rounded-2xl overflow-hidden">
                         <div class="relative w-full aspect-video">
                             <img id="mjpeg" class="w-full h-full object-contain select-none" 
-                                 src="http://44.223.43.137:3000/stream.mjpg" 
+                                 src="/stream.mjpg" 
                                  alt="Stream de vídeo"
                                  @load="videoLoaded = true"
                                  @error="videoLoaded = false"

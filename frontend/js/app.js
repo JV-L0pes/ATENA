@@ -3,7 +3,7 @@
 // Configuração global
 const CONFIG = {
     API: {
-        BASE_URL: 'http://44.223.43.137:3000',
+        BASE_URL: window.location.origin,
         ENDPOINTS: {
             HEALTH: '/health',
             STATUS: '/status',
@@ -41,13 +41,14 @@ const CONFIG = {
 // Função principal Alpine.js
 function athenaApp() {
     return {
-      // Estado da aplicação
+        // Estado da aplicação
         activeView: 'dashboard',
       connectionStatus: 'disconnected',
         videoLoaded: false,
         isDetectionRunning: false,
         configSaving: false,
         initialized: false,
+        chartUpdating: false,
         // Modo de exibição das detecções: 'negatives' | 'positives' | 'both'
         detectionViewMode: 'negatives',
       
@@ -134,6 +135,8 @@ function athenaApp() {
         // Sistema de detecções
         eventSource: null,
         reportChart: null,
+        lastDetections: null,  // Para evitar redesenhar caixas desnecessariamente
+        lastFilteredCount: 0,  // Para logs otimizados
         
         // Inicialização
         init() {
@@ -141,7 +144,7 @@ function athenaApp() {
             if (this.initialized) return;
             this.initialized = true;
             
-            console.log('🚀 Inicializando Athena Dashboard');
+            // Inicialização silenciosa para performance
             
             // Carregar dados iniciais
             this.loadSystemStatus();
@@ -152,10 +155,12 @@ function athenaApp() {
             // Conectar com backend
             this.connectToBackend();
             
-            // Inicializar gráfico após um pequeno delay
-            setTimeout(() => {
-                this.initChart();
-            }, 100);
+            // Timer para limpar caixas antigas
+            setInterval(() => {
+                this.clearOldDetections();
+            }, 2000); // A cada 2 segundos
+            
+            // Gráfico desabilitado temporariamente
             
             // Verificar se o stream está funcionando após 3 segundos
             setTimeout(() => {
@@ -295,22 +300,28 @@ function athenaApp() {
             // Processar detecções (boxes) se disponível
             if (data.boxes && Array.isArray(data.boxes)) {
                 this.currentDetections = data.boxes;
-                console.log(`🔍 Processando ${data.boxes.length} detecções:`, data.boxes);
                 
                 // Desenhar caixas de detecção
                 this.drawDetectionBoxes(data.boxes);
             }
             
-            // Atualizar gráfico se estiver na view de relatório
-            if (this.activeView === 'relatorio' && this.reportChart) {
-                this.updateChart();
-            }
+            // Gráfico desabilitado temporariamente
+            // if (this.activeView === 'relatorio' && this.reportChart) {
+            //     this.updateChart();
+            // }
         },
 
         // Desenhar caixas de detecção
         drawDetectionBoxes(detections) {
-            // Limpar detecções anteriores
-            this.clearDetectionBoxes();
+            // Verificar se as detecções mudaram significativamente
+            if (this.detectionsChanged(detections)) {
+                // Limpar detecções anteriores apenas se mudaram
+                this.clearDetectionBoxes();
+                this.lastDetections = JSON.stringify(detections);
+            } else {
+                // Detecções não mudaram, não redesenhar
+                return;
+            }
             
             if (!detections || detections.length === 0) return;
             
@@ -332,42 +343,101 @@ function athenaApp() {
                 videoContainer.appendChild(detectionContainer);
             }
             
-            // Filtragem conforme modo selecionado
-            const isMissing = d => typeof d.class_name === 'string' && d.class_name.startsWith('missing-');
-            const isPositiveEPI = d => {
-                const cn = d.class_name;
-                return ['helmet','safety-vest','gloves','glasses'].includes(cn);
+            // Filtragem conforme modo selecionado - LÓGICA CORRIGIDA
+            const isMissing = d => {
+                // AUSÊNCIAS = Detecções virtuais (pessoa sem capacete detectado pelo modelo)
+                return Array.isArray(d.missing_epis) && d.missing_epis.includes('helmet');
             };
+            const isPositiveEPI = d => {
+                // DETECÇÕES = Detecções reais do modelo de IA
+                const cn = d.class_name;
+                return ['helmet','hardhat','person','head','face','ear','ear-mufs','glasses','gloves','hands'].includes(cn);
+            };
+            const isCompliant = d => {
+                // DETECÇÕES COMPLIANT = Detecções reais do modelo que são compliant
+                const cn = d.class_name;
+                return ['helmet','hardhat','ear','ear-mufs','glasses','gloves'].includes(cn) || 
+                       (cn === 'person' && Array.isArray(d.missing_epis) && d.missing_epis.length === 0);
+            };
+            
             let filtered = detections;
             if (this.detectionViewMode === 'negatives') {
+                // Mostrar apenas AUSÊNCIAS (detecções virtuais - pessoa sem capacete)
                 filtered = detections.filter(isMissing);
+                console.log(`🔍 Modo 'ausências': ${filtered.length} detecções virtuais (pessoas sem capacete)`);
             } else if (this.detectionViewMode === 'positives') {
+                // Mostrar apenas DETECÇÕES REAIS do modelo de IA
                 filtered = detections.filter(isPositiveEPI);
+                console.log(`🔍 Modo 'detecções': ${filtered.length} detecções reais do modelo de IA`);
             } else {
-                filtered = detections.filter(d => isMissing(d) || isPositiveEPI(d));
+                // Mostrar todas as detecções (virtuais + reais)
+                filtered = detections;
+                console.log(`🔍 Modo 'ambos': ${filtered.length} detecções (virtuais + reais)`);
+            }
+
+            // Log apenas quando há mudanças significativas
+            if (filtered.length !== this.lastFilteredCount) {
+                console.log(`🔍 ${filtered.length} detecções ativas`);
+                this.lastFilteredCount = filtered.length;
             }
 
             // Desenhar cada detecção
             filtered.forEach((detection, index) => {
+                // Verificar se a detecção tem os campos necessários
+                if (!detection.bbox || !Array.isArray(detection.bbox) || detection.bbox.length < 4) {
+                    console.warn('⚠️ Detecção inválida:', detection);
+                    return;
+                }
+                
                 const box = detection.bbox;
-                const confidence = detection.confidence;
-                const className = detection.class_name;
-                const classId = detection.class_id;
+                const confidence = detection.confidence || 0;
+                const className = detection.class_name || 'unknown';
+                const classId = detection.class_id || 0;
                 
                 // Criar elemento da caixa
                 const boxElement = document.createElement('div');
                 boxElement.className = 'detection-box';
                 boxElement.style.position = 'absolute';
-                // Cor por compliance: pessoa sem EPI => vermelho; caso contrário, usa verde
-                const hasMissing = className === 'person' && Array.isArray(detection.missing_epis) && detection.missing_epis.length > 0;
-                // Cores por tipo: missing-* vermelho, positivos verdes
-                const isVirtualMissing = typeof className === 'string' && className.startsWith('missing-');
-                const borderColor = isVirtualMissing ? '#ff0000' : '#00ff00';
-                const bgColor = isVirtualMissing ? 'rgba(255, 0, 0, 0.12)' : 'rgba(0, 255, 0, 0.1)';
+                boxElement.style.transition = 'opacity 0.3s ease-in-out';  // Transição suave
+                boxElement.style.opacity = '1';
+                
+                // Cor por compliance: pessoa sem capacete => vermelho; caso contrário, usa verde
+                const hasMissingHelmet = Array.isArray(detection.missing_epis) && detection.missing_epis.includes('helmet');
+                const isCompliant = detection.compliant === true || !hasMissingHelmet;
+                const isMissingHelmetClass = className.startsWith('missing-helmet');
+                
+                // Cores baseadas no status do capacete
+                let borderColor, bgColor, labelText;
+                
+                if (isMissingHelmetClass) {
+                    // Detecção virtual de capacete faltando = VERMELHO
+                    borderColor = '#ff0000';
+                    bgColor = 'rgba(255, 0, 0, 0.2)';
+                    labelText = `Falta: Capacete`;
+                } else if (hasMissingHelmet) {
+                    // Pessoa sem capacete = VERMELHO
+                    borderColor = '#ff0000';
+                    bgColor = 'rgba(255, 0, 0, 0.15)';
+                    labelText = `Pessoa - Sem Capacete`;
+                } else if (isCompliant) {
+                    // Pessoa com capacete = VERDE
+                    borderColor = '#00ff00';
+                    bgColor = 'rgba(0, 255, 0, 0.15)';
+                    labelText = `Pessoa - Com Capacete`;
+                } else {
+                    // Outras detecções (face, head, etc.) = AZUL
+                    borderColor = '#0080ff';
+                    bgColor = 'rgba(0, 128, 255, 0.15)';
+                    labelText = `${className} (${(confidence * 100).toFixed(1)}%)`;
+                }
+                
                 boxElement.style.border = `2px solid ${borderColor}`;
                 boxElement.style.backgroundColor = bgColor;
                 boxElement.style.pointerEvents = 'none';
                 boxElement.style.zIndex = '11';
+                
+                // Adicionar ID único para tracking
+                boxElement.id = `detection-${index}-${Date.now()}`;
                 
                 // Calcular posição baseada no tamanho da imagem
                 const img = document.getElementById('mjpeg');
@@ -384,6 +454,11 @@ function athenaApp() {
                     boxElement.style.top = `${y}px`;
                     boxElement.style.width = `${width}px`;
                     boxElement.style.height = `${height}px`;
+                    
+                    // Log removido para performance
+                } else {
+                    console.warn('⚠️ Imagem não encontrada ou sem dimensões');
+                    return;
                 }
                 
                 // Criar label
@@ -398,26 +473,92 @@ function athenaApp() {
                 label.style.fontWeight = 'bold';
                 label.style.borderRadius = '3px';
                 label.style.whiteSpace = 'nowrap';
-                if (isVirtualMissing) {
-                    // label amigável para missing-*
-                    const nice = className.replace('missing-', '').replace('-', ' ');
-                    label.textContent = `Faltando: ${nice}`;
-                } else {
-                    label.textContent = `${className} (${(confidence * 100).toFixed(1)}%)`;
-                }
+                label.textContent = labelText;
                 
                 boxElement.appendChild(label);
                 detectionContainer.appendChild(boxElement);
             });
             
-            console.log(`✅ Desenhadas ${detections.length} caixas de detecção`);
+            // Log removido para performance
         },
 
-        // Limpar caixas de detecção
+        // Verificar se as detecções mudaram significativamente
+        detectionsChanged(newDetections) {
+            if (!this.lastDetections) return true;
+            
+            try {
+                const lastDetections = JSON.parse(this.lastDetections);
+                
+                // Comparar número de detecções
+                if (newDetections.length !== lastDetections.length) {
+                    return true;
+                }
+                
+                // Comparar posições das caixas (com tolerância)
+                for (let i = 0; i < newDetections.length; i++) {
+                    const newDet = newDetections[i];
+                    const lastDet = lastDetections[i];
+                    
+                    if (!newDet.bbox || !lastDet.bbox) return true;
+                    
+                    // Tolerância de 20 pixels para movimento
+                    const tolerance = 20;
+                    for (let j = 0; j < 4; j++) {
+                        if (Math.abs(newDet.bbox[j] - lastDet.bbox[j]) > tolerance) {
+                            return true;
+                        }
+                    }
+                    
+                    // Comparar classe e confiança
+                    if (newDet.class_name !== lastDet.class_name) return true;
+                    if (Math.abs(newDet.confidence - lastDet.confidence) > 0.1) return true;
+                }
+                
+                return false; // Não mudou significativamente
+            } catch (error) {
+                console.warn('Erro ao comparar detecções:', error);
+                return true; // Em caso de erro, redesenhar
+            }
+        },
+
+        // Limpar caixas de detecção com fade-out
         clearDetectionBoxes() {
             const container = document.getElementById('detection-container');
             if (container) {
-                container.innerHTML = '';
+                // Fade-out gradual em vez de remoção instantânea
+                const boxes = container.querySelectorAll('.detection-box');
+                boxes.forEach(box => {
+                    box.style.opacity = '0';
+                    setTimeout(() => {
+                        if (box.parentNode) {
+                            box.remove();
+                        }
+                    }, 300); // Aguardar transição de 300ms
+                });
+            }
+        },
+
+        // Limpar caixas antigas (sem detecção por muito tempo)
+        clearOldDetections() {
+            const container = document.getElementById('detection-container');
+            if (container) {
+                const boxes = container.querySelectorAll('.detection-box');
+                const now = Date.now();
+                boxes.forEach(box => {
+                    const boxId = box.id;
+                    const timestamp = parseInt(boxId.split('-').pop());
+                    const age = now - timestamp;
+                    
+                    // Remover caixas com mais de 5 segundos
+                    if (age > 5000) {
+                        box.style.opacity = '0';
+                        setTimeout(() => {
+                            if (box.parentNode) {
+                                box.remove();
+                            }
+                        }, 300);
+                    }
+                });
             }
         },
 
@@ -481,12 +622,17 @@ function athenaApp() {
         // Carregar informações das classes
         async loadClassesInfo() {
             try {
+                console.log('🎯 Carregando informações das classes...');
                 const response = await fetch(CONFIG.API.BASE_URL + CONFIG.API.ENDPOINTS.CLASSES);
                 if (response.ok) {
                     const data = await response.json();
+                    console.log('📋 Dados das classes recebidos:', data);
                     this.classesInfo.class_names = data.class_names || [];
                     this.classesInfo.total_classes = data.total_classes || this.classesInfo.class_names.length;
                     this.classesInfo.active_classes = data.enabled_classes || [...this.classesInfo.class_names];
+                    console.log('✅ Classes carregadas:', this.classesInfo);
+                } else {
+                    console.error('❌ Erro na resposta do servidor:', response.status, response.statusText);
                 }
             } catch (error) {
                 console.error('❌ Erro ao carregar classes:', error);
@@ -509,6 +655,7 @@ function athenaApp() {
         async saveEnabledClasses() {
             try {
                 const payload = { enabled_classes: this.classesInfo.active_classes };
+                console.log('💾 Salvando classes:', payload);
                 const resp = await fetch(CONFIG.API.BASE_URL + '/classes/enabled', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
@@ -518,11 +665,14 @@ function athenaApp() {
                     const result = await resp.json();
                     this.classesInfo.active_classes = result.enabled_classes || this.classesInfo.active_classes;
                     console.log('✅ Classes salvas:', this.classesInfo.active_classes);
+                    this.showToast('Classes atualizadas com sucesso!', 'success');
                 } else {
-                    console.error('❌ Falha ao salvar classes');
+                    console.error('❌ Falha ao salvar classes:', resp.status, resp.statusText);
+                    this.showToast('Erro ao salvar classes', 'error');
                 }
             } catch (e) {
                 console.error('❌ Erro ao salvar classes:', e);
+                this.showToast('Erro ao salvar classes', 'error');
             }
         },
         
@@ -533,80 +683,117 @@ function athenaApp() {
             
             // Destruir gráfico existente se houver
             if (this.reportChart) {
-                this.reportChart.destroy();
+                try {
+                    this.reportChart.destroy();
+                } catch (e) {
+                    console.warn('Erro ao destruir gráfico anterior:', e);
+                }
+                this.reportChart = null;
             }
             
-            this.reportChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Taxa de Conformidade (%)',
-                        data: [],
-                        borderColor: '#1e40af',
-                        backgroundColor: 'rgba(30, 64, 175, 0.1)',
-                        tension: 0.4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            max: 100,
-                            ticks: {
-                                callback: function(value) {
-                                    return value + '%';
-                                }
-                            }
-                        }
+            try {
+                this.reportChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Taxa de Conformidade (%)',
+                            data: [],
+                            borderColor: '#1e40af',
+                            backgroundColor: 'rgba(30, 64, 175, 0.1)',
+                            tension: 0.4,
+                            fill: false
+                        }]
                     },
-                    plugins: {
-                        legend: {
-                            display: true,
-                            position: 'top'
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {
+                            intersect: false,
+                            mode: 'index'
                         },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return `Conformidade: ${context.parsed.y}%`;
+                        scales: {
+                            y: {
+                                beginAtZero: true,
+                                max: 100,
+                                ticks: {
+                                    callback: function(value) {
+                                        return value + '%';
+                                    }
+                                }
+                            },
+                            x: {
+                                display: true,
+                                title: {
+                                    display: true,
+                                    text: 'Tempo'
                                 }
                             }
+                        },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'top'
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        return `Conformidade: ${context.parsed.y}%`;
+                                    }
+                                }
+                            }
+                        },
+                        animation: {
+                            duration: 0
                         }
-          }
-        }
-      });
-
-            console.log('📊 Gráfico inicializado');
+                    }
+                });
+                
+                console.log('📊 Gráfico inicializado');
+            } catch (error) {
+                console.error('Erro ao inicializar gráfico:', error);
+                this.reportChart = null;
+            }
         },
         
         // Atualizar gráfico
         updateChart() {
-            if (!this.reportChart) return;
+            if (!this.reportChart || !this.reportChart.data || !this.reportChart.data.datasets) return;
             
-            const now = new Date();
-            const timeLabel = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-            
-            // Adicionar novo ponto
-            this.reportChart.data.labels.push(timeLabel);
-            this.reportChart.data.datasets[0].data.push(this.stats.compliance_score || 0);
+            try {
+                const now = new Date();
+                const timeLabel = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+                
+                // Verificar se os dados existem
+                if (!this.reportChart.data.labels) this.reportChart.data.labels = [];
+                if (!this.reportChart.data.datasets[0]) return;
+                if (!this.reportChart.data.datasets[0].data) this.reportChart.data.datasets[0].data = [];
+                
+                // Adicionar novo ponto
+                this.reportChart.data.labels.push(timeLabel);
+                this.reportChart.data.datasets[0].data.push(this.stats.compliance_score || 0);
 
-            // Manter apenas os últimos 20 pontos
-            if (this.reportChart.data.labels.length > 20) {
-                this.reportChart.data.labels.shift();
-                this.reportChart.data.datasets[0].data.shift();
+                // Manter apenas os últimos 20 pontos
+                if (this.reportChart.data.labels.length > 20) {
+                    this.reportChart.data.labels.shift();
+                    this.reportChart.data.datasets[0].data.shift();
+                }
+
+                // Atualizar sem animação para evitar problemas
+                this.reportChart.update('none');
+            } catch (error) {
+                console.error('Erro ao atualizar gráfico:', error);
+                // Se houver erro, reinicializar o gráfico
+                setTimeout(() => {
+                    this.initChart();
+                }, 1000);
             }
-
-            this.reportChart.update('none');
         },
 
         // Carregar dados do relatório
         loadReportData() {
-            // Atualizar gráfico com dados atuais
-            if (this.reportChart) {
-                this.updateChart();
-            }
+            // Desabilitar gráfico temporariamente para evitar erros
+            console.log('📊 Relatório carregado (gráfico desabilitado temporariamente)');
         },
 
         // Tirar snapshot
