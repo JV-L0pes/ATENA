@@ -192,8 +192,34 @@ function athenaApp() {
             console.log('✅ Athena Dashboard inicializado');
 
             // redimensionar overlay quando janela muda / fullscreen
-            window.addEventListener('resize', () => this.resizeOverlayToVideo());
-            document.addEventListener('fullscreenchange', () => this.resizeOverlayToVideo());
+            window.addEventListener('resize', () => {
+                setTimeout(() => this.resizeOverlayToVideo(), 50);
+            });
+            
+            // Reiniciar detecção quando entrar/sair de fullscreen
+            document.addEventListener('fullscreenchange', () => {
+                setTimeout(() => {
+                    this.resizeOverlayToVideo();
+                    
+                    // Se a detecção está ativa, garantir que o loop continue
+                    if (this.detectionActive && this.videoPlayer) {
+                        // Verificar se o requestVideoFrameCallback ainda está ativo
+                        if (typeof this.videoPlayer.requestVideoFrameCallback === 'function') {
+                            // Reiniciar o callback se necessário
+                            if (this.detectionLoop) {
+                                try {
+                                    this.videoPlayer.requestVideoFrameCallback(this.detectionLoop);
+                                } catch (e) {
+                                    console.warn('Erro ao reiniciar callback após fullscreen:', e);
+                                    // Reiniciar detecção completamente
+                                    this.toggleDetection();
+                                    setTimeout(() => this.toggleDetection(), 100);
+                                }
+                            }
+                        }
+                    }
+                }, 100);
+            });
         },
 
         // Navegação
@@ -1230,17 +1256,33 @@ function athenaApp() {
                 
                 // Usar requestVideoFrameCallback para melhor cadência quando disponível
                 if (typeof this.videoPlayer.requestVideoFrameCallback === 'function') {
-                    const loop = () => {
-                        if (!this.detectionActive) return;
+                    // Guardar referência do loop para poder reiniciar se necessário
+                    this.detectionLoop = () => {
+                        if (!this.detectionActive || !this.videoPlayer) return;
                         const now = performance.now();
                         const minIntervalMs = 1000 / (this.dynamicTargetFps || CONFIG.DETECTION.TARGET_FPS);
                         if (now - this.lastDetectionTime >= minIntervalMs && !this.inFlightDetection) {
                             this.detectInCurrentFrame();
                             this.lastDetectionTime = now;
                         }
-                        this.videoPlayer.requestVideoFrameCallback(loop);
+                        // Verificar se o vídeo ainda existe antes de chamar o callback novamente
+                        if (this.videoPlayer && this.detectionActive) {
+                            try {
+                                this.videoPlayer.requestVideoFrameCallback(this.detectionLoop);
+                            } catch (e) {
+                                console.warn('Erro ao agendar próximo frame callback:', e);
+                                // Fallback para interval se requestVideoFrameCallback falhar
+                                if (!this.detectionInterval) {
+                                    this.detectionInterval = setInterval(() => {
+                                        if (this.detectionActive && !this.inFlightDetection) {
+                                            this.detectInCurrentFrame();
+                                        }
+                                    }, 1000 / (this.dynamicTargetFps || CONFIG.DETECTION.TARGET_FPS));
+                                }
+                            }
+                        }
                     };
-                    this.videoPlayer.requestVideoFrameCallback(loop);
+                    this.videoPlayer.requestVideoFrameCallback(this.detectionLoop);
                 } else {
                     // Fallback: usar timeupdate do vídeo
                     this.detectionInterval = setInterval(() => {
@@ -1418,12 +1460,62 @@ function athenaApp() {
         async toggleFullscreen() {
             const container = document.getElementById('videoContainer');
             if (!container) return;
+            
+            // Salvar estado da detecção antes de entrar em fullscreen
+            const wasDetecting = this.detectionActive;
+            
             if (document.fullscreenElement) {
                 await document.exitFullscreen();
             } else {
                 await container.requestFullscreen();
             }
-            this.resizeOverlayToVideo();
+            
+            // Aguardar o redimensionamento do vídeo antes de ajustar overlay
+            setTimeout(() => {
+                this.resizeOverlayToVideo();
+                
+                // Se a detecção estava ativa, reiniciar o loop de detecção
+                if (wasDetecting && this.detectionActive) {
+                    // Parar detecção atual
+                    this.detectionActive = false;
+                    
+                    // Limpar intervalos/callbacks existentes
+                    if (this.detectionInterval) {
+                        clearInterval(this.detectionInterval);
+                        this.detectionInterval = null;
+                    }
+                    
+                    // Reiniciar detecção após um pequeno delay
+                    setTimeout(() => {
+                        this.detectionActive = true;
+                        this.lastDetectionTime = performance.now();
+                        this.lastFpsTick = performance.now();
+                        this.framesThisSecond = 0;
+                        
+                        // Reiniciar o loop de detecção
+                        if (typeof this.videoPlayer.requestVideoFrameCallback === 'function') {
+                            const loop = () => {
+                                if (!this.detectionActive) return;
+                                const now = performance.now();
+                                const minIntervalMs = 1000 / (this.dynamicTargetFps || CONFIG.DETECTION.TARGET_FPS);
+                                if (now - this.lastDetectionTime >= minIntervalMs && !this.inFlightDetection) {
+                                    this.detectInCurrentFrame();
+                                    this.lastDetectionTime = now;
+                                }
+                                this.videoPlayer.requestVideoFrameCallback(loop);
+                            };
+                            this.videoPlayer.requestVideoFrameCallback(loop);
+                        } else {
+                            // Fallback: usar timeupdate do vídeo
+                            this.detectionInterval = setInterval(() => {
+                                if (this.detectionActive && !this.inFlightDetection) {
+                                    this.detectInCurrentFrame();
+                                }
+                            }, 1000 / (this.dynamicTargetFps || CONFIG.DETECTION.TARGET_FPS));
+                        }
+                    }, 100);
+                }
+            }, 100);
         },
 
         // Atualizar estatísticas em tempo real - TOTALMENTE DINÂMICO (sem hardcode)

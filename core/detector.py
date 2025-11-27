@@ -32,68 +32,102 @@ except ImportError:
     StableWebcamCapture = None
     logger.warning("⚠️ Sistema de recuperação não disponível")
 
-class AthenaRealtimeDetector:
-    """Detector ultra-otimizado para tempo real"""
+class AthenaDetector:
+    """Detector consolidado para tempo real e processamento de vídeos"""
     
-    def __init__(self, model_path: str = None, video_source: str = None):
-        # Usar modelo da Fase 1 por padrão
+    def __init__(self, model_path: str = None, video_source: str = None, video_mode: bool = False):
+        """
+        Inicializa o detector
+        
+        Args:
+            model_path: Caminho para o modelo
+            video_source: Fonte de vídeo (RTSP, webcam, etc.)
+            video_mode: Se True, otimiza para processamento completo de vídeos (sem frame skip)
+        """
+        # Usar modelo da configuração ou padrão
         if model_path is None:
-            model_path = "athena_training_2phase_optimized/models/phase1_complete/athena_phase1_tesla_t4/weights/best.pt"
+            from .config import Config
+            model_path = Config.MODEL_PATH
+            # Se não existe, tentar caminho alternativo
+            if not Path(model_path).exists():
+                alt_path = "athena_training_2phase_optimized/models/phase1_complete/athena_phase1_tesla_t4/weights/best.pt"
+                if Path(alt_path).exists():
+                    model_path = alt_path
+                else:
+                    # Tentar models/best.pt
+                    if Path("models/best.pt").exists():
+                        model_path = "models/best.pt"
         
         self.model_path = Path(model_path)
-        self.video_source = video_source or os.getenv("RTSP_URL", "0")  # Usar RTSP_URL se disponível
+        self.video_source = video_source or os.getenv("RTSP_URL", "0")
+        self.video_mode = video_mode  # Modo vídeo = processar todos os frames
         self.model = None
         self.device = None
         self.is_initialized = False
         
-        # Configurações otimizadas para tempo real com precisão
-        # Thresholds ajustados para detectar pessoas e EPIs corretamente
-        self.config = {
-            'conf_threshold': 0.25,  # Threshold base reduzido para detectar melhor
-            'iou_threshold': 0.45,
-            'max_detections': 300,   # Limite maior para modelo de 17 classes
-            'frame_skip': 2,        # Processar apenas 1 a cada 2 frames
-            'resize_factor': 0.5,   # Reduzir resolução para velocidade
-            'batch_size': 1,        # Processar 1 frame por vez
-            'warmup_frames': 5       # Frames de aquecimento
-        }
-        # Limiares por classe (thresholds ajustados para precisão - modelo bem treinado)
-        # Classes mais críticas podem ter thresholds mais altos
+        # Configurações otimizadas - diferentes para tempo real vs vídeo
+        if video_mode:
+            # MODO VÍDEO: Máxima precisão, processar todos os frames
+            self.config = {
+                'conf_threshold': 0.20,  # Threshold mais baixo para capturar mais detecções
+                'iou_threshold': 0.45,
+                'max_detections': 500,   # Limite maior para não perder detecções
+                'frame_skip': 1,         # Processar TODOS os frames (100% de cobertura)
+                'resize_factor': 1.0,    # Resolução original (sem perda de detalhes)
+                'batch_size': 4,         # Batch processing para melhor performance
+                'warmup_frames': 5,
+                'max_resolution': None,   # Sem limite de resolução
+                'use_temporal_smoothing': True,  # Suavização temporal para melhor precisão
+                'multi_scale': False      # Desabilitado para consistência
+            }
+        else:
+            # MODO TEMPO REAL: Balance entre performance e precisão
+            self.config = {
+                'conf_threshold': 0.25,
+                'iou_threshold': 0.45,
+                'max_detections': 300,
+                'frame_skip': 2,         # Processar 1 a cada 2 frames para performance
+                'resize_factor': 1.0,
+                'batch_size': 1,
+                'warmup_frames': 5,
+                'max_resolution': 1920,  # Limite para performance
+                'use_temporal_smoothing': True,
+                'multi_scale': False
+            }
+        
+        # Limiares por classe (thresholds ajustados para precisão)
         self.class_thresholds: Dict[str, float] = {
-            'person': 0.25,         # Reduzido para detectar pessoas melhor (classe mais importante)
-            'helmet': 0.30,         # EPIs críticos
-            'glasses': 0.25,
-            'safety-vest': 0.30,
-            'gloves': 0.25,
-            'ear-mufs': 0.25,
-            'ear': 0.25,
-            'face': 0.30,           # Face precisa de mais confiança
-            'face-guard': 0.25,
-            'face-mask-medical': 0.25,
-            'foot': 0.25,
-            'tools': 0.30,          # Tools podem ser confundidos com outros objetos
-            'hands': 0.25,
-            'head': 0.30,           # Head reduzido para detectar melhor
-            'medical-suit': 0.25,
-            'shoes': 0.25,
-            'safety-suit': 0.25,
+            'person': 0.20,         # Threshold mais baixo para não perder pessoas
+            'helmet': 0.25,         # EPIs críticos
+            'glasses': 0.20,
+            'safety-vest': 0.25,
+            'gloves': 0.20,
+            'ear-mufs': 0.20,
+            'ear': 0.20,
+            'face': 0.25,
+            'face-guard': 0.20,
+            'face-mask-medical': 0.20,
+            'foot': 0.20,
+            'tools': 0.25,
+            'hands': 0.20,
+            'head': 0.25,
+            'medical-suit': 0.20,
+            'shoes': 0.20,
+            'safety-suit': 0.20,
         }
         
-        # EPIs requeridos (configurável via env: REQUIRED_EPIS=helmet,safety-vest,gloves,glasses)
+        # EPIs requeridos
         required_epis_env = os.getenv("REQUIRED_EPIS", "helmet,safety-vest,gloves,glasses")
         self.required_epis = set([e.strip() for e in required_epis_env.split(',') if e.strip()])
-
-        # Classes do modelo best.pt (17 classes)
+        
+        # Classes do modelo
         self.class_names = [
             'person', 'ear', 'ear-mufs', 'face', 'face-guard', 'face-mask-medical', 
             'foot', 'tools', 'glasses', 'gloves', 'helmet', 'hands', 'head', 
             'medical-suit', 'shoes', 'safety-suit', 'safety-vest'
         ]
-
-        # Classes habilitadas para detecção (por padrão todas ativas)
-        self.enabled_classes = set(self.class_names)
         
-        # Classes principais para EPIs (mapeamento para o modelo)
+        self.enabled_classes = set(self.class_names)
         self.main_classes = ['person', 'helmet', 'safety-vest', 'gloves', 'glasses']
         
         # Estado do sistema
@@ -104,16 +138,19 @@ class AthenaRealtimeDetector:
         self.frame_count = 0
         self.last_process_time = 0
         self.fps_counter = deque(maxlen=30)
-        # Suavização temporal de ausências por pessoa
+        
+        # Suavização temporal
         self.temporal_params = {
-            'missing_frames_required': 3,   # K - confirmar ausência
-            'present_frames_clear': 2       # M - limpar ausência
+            'missing_frames_required': 3,
+            'present_frames_clear': 2
         }
-        # Contadores: chave = (person_key, epi_name)
         self.missing_counters: Dict[Tuple[str, str], int] = {}
         
-        # Threading otimizado
-        self.frame_queue = Queue(maxsize=1)  # Fila mínima: sempre o frame mais novo
+        # Cache de detecções para suavização temporal (modo vídeo)
+        self.detection_cache = deque(maxlen=5) if video_mode else None
+        
+        # Threading
+        self.frame_queue = Queue(maxsize=1)
         self.detection_thread = None
         self.running = False
         
@@ -125,26 +162,17 @@ class AthenaRealtimeDetector:
             'frames_processed': 0,
             'frames_skipped': 0,
             'total_frames': 0,
-            # Estatísticas de compliance
             'total_pessoas': 0,
-            'com_capacete': 0,
-            'sem_capacete': 0,
-            'com_colete': 0,
-            'sem_colete': 0,
-            'com_luvas': 0,
-            'sem_luvas': 0,
-            'com_oculos': 0,
-            'sem_oculos': 0,
             'compliance_score': 0.0,
             'detection_rate': 0.0,
             'avg_confidence': 0.0,
             'violations': []
         }
         
-        logger.info("🚀 Detector ATHENA Tempo Real inicializado")
+        logger.info(f"🚀 Detector ATHENA inicializado (modo: {'vídeo' if video_mode else 'tempo real'})")
     
     def initialize_model(self):
-        """Inicializa modelo com configurações ultra-otimizadas"""
+        """Inicializa modelo com configurações otimizadas"""
         try:
             if not self.model_path.exists():
                 logger.error(f"❌ Modelo não encontrado: {self.model_path}")
@@ -152,42 +180,31 @@ class AthenaRealtimeDetector:
             
             logger.info(f"🎯 Carregando modelo: {self.model_path}")
             
-            # Carregar modelo
             self.model = YOLO(str(self.model_path))
             
-            # Verificar se as classes estão corretas
-            logger.info(f"📋 Classes carregadas do modelo: {len(self.model.names)}")
-            logger.info(f"📋 Primeiras 5 classes: {list(self.model.names.values())[:5]}")
+            logger.info(f"📋 Classes carregadas: {len(self.model.names)}")
             
-            # Atualizar class_names com as classes reais do modelo
             self.class_names = list(self.model.names.values())
-            # Inicializar enabled_classes com todas as classes do modelo
             self.enabled_classes = set(self.class_names)
             
-            # Configurar dispositivo
             if torch.cuda.is_available():
                 self.device = torch.device('cuda')
-                logger.info("🚀 Usando GPU CUDA para inferência ultra-rápida")
+                logger.info("🚀 Usando GPU CUDA")
             else:
                 self.device = torch.device('cpu')
                 logger.info("💻 Usando CPU")
             
-            # Configurar modelo para velocidade máxima
             self.model.to(self.device)
             
-            # Configurações de inferência otimizadas
             self.model.overrides = {
-                'conf': self.config['conf_threshold'],  # Threshold base
-                'iou': self.config['iou_threshold'],
                 'verbose': False,
                 'max_det': self.config['max_detections'],
-                'verbose': False,
-                'half': True if self.device.type == 'cuda' else False,  # FP16 para GPU
+                'half': True if self.device.type == 'cuda' else False,
                 'device': self.device,
                 'imgsz': 640
             }
             
-            # Aquecimento do modelo
+            # Aquecimento
             logger.info("🔥 Aquecendo modelo...")
             dummy_frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
             for _ in range(self.config['warmup_frames']):
@@ -195,7 +212,7 @@ class AthenaRealtimeDetector:
                     _ = self.model(dummy_frame, verbose=False)
             
             self.is_initialized = True
-            logger.info("✅ Modelo inicializado com configurações ultra-otimizadas!")
+            logger.info("✅ Modelo inicializado!")
             return True
             
         except Exception as e:
@@ -245,10 +262,9 @@ class AthenaRealtimeDetector:
                 
                 # Detecção com threshold de confiança aplicado
                 with torch.no_grad():
-                    # Aplicar threshold de confiança no modelo para filtrar falsos positivos
                     results = self.model(
                         frame_small,
-                        conf=self.config['conf_threshold'],  # Threshold base aplicado no modelo
+                        conf=self.config['conf_threshold'],
                         iou=self.config['iou_threshold'],
                         verbose=False,
                         imgsz=640
@@ -317,17 +333,20 @@ class AthenaRealtimeDetector:
         confidences = result.boxes.conf.cpu().numpy()
         class_ids = result.boxes.cls.cpu().numpy().astype(int)
         
-        logger.debug(f"📦 Boxes brutas do modelo: {len(boxes)}")
-        logger.debug(f"📊 Confianças: min={confidences.min():.3f}, max={confidences.max():.3f}, mean={confidences.mean():.3f}")
-        logger.debug(f"🏷️ Classes detectadas: {set(class_ids)}")
+        # Log sempre (não só em debug) para diagnóstico
+        if len(boxes) > 0:
+            logger.info(f"📦 Boxes brutas do modelo: {len(boxes)}")
+            logger.info(f"📊 Confianças: min={confidences.min():.3f}, max={confidences.max():.3f}, mean={confidences.mean():.3f}")
+            logger.info(f"🏷️ Classes detectadas: {[self.class_names[int(c)] for c in set(class_ids)]}")
+        else:
+            logger.warning("⚠️ Modelo não retornou nenhuma detecção bruta")
         
         filtered_count = 0
         for i, (box, conf, cls) in enumerate(zip(boxes, confidences, class_ids)):
             if 0 <= int(cls) < len(self.class_names):
                 x1, y1, x2, y2 = box
                 class_name = self.class_names[int(cls)]
-                # Filtrar por threshold por classe (thresholds mais altos para precisão)
-                # O modelo já aplicou conf_threshold, mas aplicamos threshold por classe adicional
+                # Filtrar por threshold por classe
                 thr = self.class_thresholds.get(class_name, self.config['conf_threshold'])
                 
                 if conf < thr:
@@ -353,7 +372,7 @@ class AthenaRealtimeDetector:
                 detections.append(detection)
                 
                 # Log detalhado para debug
-                if self.frame_count % 30 == 0:  # Log a cada 30 frames
+                if self.frame_count % 30 == 0:
                     logger.info(f"✅ Detecção: {class_name} (conf={conf:.3f}, thr={thr:.3f})")
             else:
                 logger.warning(f"⚠️ Class ID {int(cls)} fora do range [0, {len(self.class_names)})")
@@ -506,12 +525,16 @@ class AthenaRealtimeDetector:
         # EPIs únicos detectados (dinâmico)
         detected_epi_classes = set(d.get('class_name') for d in epis_raw)
         
-        # EPIs requeridos = interseção entre requeridos (config) e detectados
+        # EPIs requeridos = usar required_epis da config (não só os detectados)
+        # Se não detectar EPIs, ainda devemos verificar se estão faltando
         active_required = set()
+        # Primeiro, adicionar todos os EPIs requeridos que estão habilitados
+        for req_epi in self.required_epis:
+            if req_epi in self.enabled_classes:
+                active_required.add(req_epi)
+        # Também adicionar EPIs detectados que estão nos requeridos
         for epi_class in detected_epi_classes:
-            # Se está nos requeridos E habilitados, adicionar
             if epi_class in self.enabled_classes:
-                # Verificar se está nos required_epis (pode ter alias)
                 if epi_class in self.required_epis:
                     active_required.add(epi_class)
                 # Mapear aliases comuns
@@ -800,7 +823,6 @@ class AthenaRealtimeDetector:
             'compliance_score': compliance_score,
         })
 
-    # ===== API auxiliar para habilitar/desabilitar classes =====
     def get_enabled_classes(self) -> List[str]:
         return sorted(list(self.enabled_classes))
 
@@ -933,10 +955,10 @@ class AthenaRealtimeDetector:
 
 # Classe principal para compatibilidade
 class AthenaDetectionSystemOptimized:
-    """Sistema principal otimizado"""
+    """Sistema principal otimizado (compatibilidade)"""
     
     def __init__(self, model_path: str = None, video_source: str = None):
-        self.detector = AthenaRealtimeDetector(model_path, video_source)
+        self.detector = AthenaDetector(model_path, video_source)
         logger.info("🎯 Sistema ATHENA Tempo Real inicializado")
     
     def setup_detector(self):

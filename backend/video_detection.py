@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class VideoAIDetector:
     """Detector de IA para processamento de vídeos"""
     
-    def __init__(self, model_path: str = None, confidence_threshold: float = 0.25):
+    def __init__(self, model_path: str = None, confidence_threshold: float = 0.20):
         """
         Inicializa o detector de vídeos
         
@@ -34,10 +34,10 @@ class VideoAIDetector:
         self.model = None
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # Configurações de processamento
-        self.frame_skip = 1  # Processar todos os frames
-        self.max_resolution = 1920  # Resolução máxima para processamento
-        self.batch_size = 1  # Processar um frame por vez para vídeos
+        # Configurações de processamento - OTIMIZADAS PARA MÁXIMA DETECÇÃO
+        self.frame_skip = 1  # Processar TODOS os frames (100% de cobertura)
+        self.max_resolution = None  # SEM limite de resolução (manter original para máxima precisão)
+        self.batch_size = 1  # Processar um frame por vez (mais preciso que batch)
         
         # Estatísticas
         self.stats = {
@@ -48,7 +48,10 @@ class VideoAIDetector:
             'fps': 0.0
         }
         
-        logger.info(f"Video AI Detector inicializado com threshold {confidence_threshold}")
+        logger.info(f"🎬 Video AI Detector inicializado com threshold {confidence_threshold} (OTIMIZADO PARA MÁXIMA DETECÇÃO)")
+        logger.info(f"   ✅ Processando TODOS os frames (100% de cobertura)")
+        logger.info(f"   ✅ Resolução original mantida (sem limite)")
+        logger.info(f"   ✅ Threshold otimizado para capturar mais detecções")
     
     def _get_latest_model(self) -> str:
         """Obtém o modelo best.pt da Fase 1"""
@@ -187,21 +190,37 @@ class VideoAIDetector:
         return results
     
     def _detect_in_frame(self, frame: np.ndarray, frame_number: int) -> List[Dict[str, Any]]:
-        """Detecta EPIs em um frame específico (positivos e negativos)"""
+        """Detecta EPIs em um frame específico (positivos e negativos) - MÁXIMA PRECISÃO"""
         detections = []
         
         try:
-            # Redimensionar se necessário
-            if max(frame.shape[:2]) > self.max_resolution:
+            # MELHORIA: Manter resolução original (sem redimensionamento) para máxima precisão
+            # Só redimensionar se realmente necessário (muito grande) e manter proporção
+            scale = 1.0
+            frame_resized = frame
+            
+            # Limite apenas para frames extremamente grandes (4K+) para evitar OOM
+            # Se max_resolution for None, nunca redimensiona (máxima precisão)
+            if self.max_resolution is not None and max(frame.shape[:2]) > self.max_resolution:
                 scale = self.max_resolution / max(frame.shape[:2])
                 new_h, new_w = int(frame.shape[0] * scale), int(frame.shape[1] * scale)
-                frame_resized = cv2.resize(frame, (new_w, new_h))
+                # Usar INTER_LINEAR para melhor qualidade ao redimensionar
+                frame_resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                logger.debug(f"Frame {frame_number}: Redimensionado de {frame.shape[:2]} para {frame_resized.shape[:2]}")
             else:
+                # Manter resolução original - máxima precisão
                 frame_resized = frame
                 scale = 1.0
             
-            # Detecção usando YOLOv11 (mesmo sistema do projeto principal)
-            results = self.model(frame_resized, verbose=False)
+            # MELHORIA: Detecção com threshold mais baixo e confiança explícita
+            # Usar conf=0.20 para capturar mais detecções válidas
+            results = self.model(
+                frame_resized, 
+                verbose=False,
+                conf=0.20,  # Threshold mais baixo para não perder detecções
+                iou=0.45,   # IoU padrão
+                imgsz=640   # Tamanho de entrada do modelo
+            )
             
             # Processar resultados (mesma lógica do sistema principal)
             if results and len(results) > 0:
@@ -211,7 +230,24 @@ class VideoAIDetector:
                         for i in range(len(boxes)):
                             confidence = float(boxes.conf[i])
                             
-                            if confidence >= self.confidence_threshold:
+                            # MELHORIA: Usar threshold por classe (mais preciso)
+                            # Threshold mais baixo para capturar mais detecções válidas
+                            class_threshold = self.confidence_threshold
+                            
+                            # Thresholds específicos por classe (mais baixos para não perder detecções)
+                            class_thresholds = {
+                                'person': 0.20,  # Pessoas são críticas - threshold mais baixo
+                                'helmet': 0.25,
+                                'safety-vest': 0.25,
+                                'gloves': 0.20,
+                                'glasses': 0.20,
+                            }
+                            
+                            # Usar threshold específico da classe se disponível
+                            if class_name in class_thresholds:
+                                class_threshold = class_thresholds[class_name]
+                            
+                            if confidence >= class_threshold:
                                 # Escalar coordenadas de volta
                                 x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
                                 x1, y1, x2, y2 = int(x1 / scale), int(y1 / scale), int(x2 / scale), int(y2 / scale)

@@ -1,53 +1,116 @@
 # 🛡️ Athena - Sistema de Detecção de EPIs
 
-Sistema inteligente de detecção de Equipamentos de Proteção Individual (EPIs) usando YOLOv5 e interface web moderna.
+Sistema inteligente de detecção de Equipamentos de Proteção Individual (EPIs) usando YOLOv11 e interface web moderna.
 
 ## ✨ Características
 
-- **Detecção em Tempo Real**: Identifica capacetes e coletes de segurança
+- **Detecção em Tempo Real**: Identifica pessoas e EPIs (17 classes) via RTSP/P2P ou webcam
+- **Processamento de Vídeos**: Upload e análise de vídeos com detecção frame a frame
 - **Interface Web Responsiva**: Dashboard moderno com Alpine.js e Tailwind CSS
-- **Modelo Treinado**: Utiliza modelo YOLOv5 customizado para detecção de EPIs
-- **Stream de Vídeo**: Transmissão ao vivo da webcam com overlay de detecções
-- **Histórico e Relatórios**: Sistema completo de registro e análise
-- **Configurações Flexíveis**: Ajuste de parâmetros de detecção em tempo real
+- **Modelo Treinado**: Utiliza modelo YOLOv11 customizado (best.pt) com 17 classes
+- **Relatórios Dinâmicos**: Geração automática de relatórios baseados em todas as classes detectadas
+- **Histórico e Snapshots**: Sistema completo de registro e análise
+- **GPU Otimizado**: Requer GPU CUDA para melhor performance
+
+## 📁 Estrutura do Projeto
+
+```
+athena_project/
+├── core/                    # Código principal de detecção
+│   ├── detector.py         # Sistema de detecção consolidado
+│   ├── config.py           # Configurações centralizadas
+│   └── __init__.py
+│
+├── backend/                 # Backend API (legado - será migrado)
+│   ├── api_optimized.py    # API FastAPI principal
+│   ├── config.py           # Configurações do backend
+│   ├── video_detection.py  # Detecção em vídeos (legado)
+│   ├── video_report.py     # Sistema de relatórios
+│   ├── history.py          # Histórico de detecções
+│   └── snapshot.py         # Sistema de snapshots
+│
+├── api/                     # Nova estrutura de API (em desenvolvimento)
+│   ├── main.py            # FastAPI app principal
+│   └── routes/            # Rotas organizadas por funcionalidade
+│
+├── frontend/                # Interface web
+│   ├── index.html         # Página principal
+│   ├── js/
+│   │   ├── app.js        # Lógica principal (Alpine.js)
+│   │   └── utils.js      # Utilitários
+│   └── styles/
+│       └── main.css      # Estilos consolidados
+│
+├── models/                  # Modelos treinados
+│   └── best.pt            # Modelo principal (YOLOv11)
+│
+├── storage/                 # Dados de produção
+│   ├── videos/            # Vídeos processados
+│   ├── uploads/           # Vídeos enviados
+│   ├── reports/           # Relatórios gerados
+│   ├── snapshots/         # Snapshots
+│   └── logs/              # Logs de produção
+│
+├── archive/                 # Dados arquivados
+│   └── training_data/     # Dados de treinamento
+│
+├── dev/                    # Ferramentas de desenvolvimento
+│   ├── tools/             # Ferramentas de processamento
+│   ├── scripts/           # Scripts de treinamento
+│   └── tests/             # Testes
+│
+├── start_api_optimized.py  # Script de inicialização
+└── requirements.txt        # Dependências Python
+```
 
 ## 🚀 Início Rápido
 
 ### Pré-requisitos
 
 - Python 3.8+
-- Webcam funcional
-- CUDA (opcional, para aceleração GPU)
+- GPU NVIDIA com CUDA (obrigatório)
+- PyTorch com suporte CUDA
+- Webcam ou fonte RTSP/P2P
 
 ### Instalação
 
 1. **Clone o repositório**
 ```bash
 git clone <repository-url>
-cd Atena
+cd athena_project
 ```
 
-2. **Instale as dependências**
+2. **Instale PyTorch com CUDA** (IMPORTANTE: faça isso primeiro)
+```bash
+# Para CUDA 11.8:
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Para CUDA 12.1:
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+3. **Instale as dependências**
 ```bash
 pip install -r requirements.txt
 ```
 
-3. **Verifique se há modelos treinados**
+4. **Verifique o modelo**
 ```bash
-ls yolov5/runs/train/
+# O modelo deve estar em models/best.pt ou no caminho padrão
+ls models/best.pt
 ```
 
 ### Execução
 
 1. **Inicie o backend**
 ```bash
-python start_api.py
+python start_api_optimized.py
 ```
 
-2. **Abra o frontend**
+2. **Acesse o frontend**
 ```bash
 # Abra o arquivo frontend/index.html no navegador
-# Ou use um servidor local simples:
+# Ou use um servidor local:
 cd frontend
 python -m http.server 8080
 # Acesse: http://localhost:8080
@@ -55,7 +118,7 @@ python -m http.server 8080
 
 3. **Acesse a API**
 ```
-http://localhost:8000
+http://localhost:3000
 ```
 
 ## 🔧 Configuração
@@ -64,165 +127,120 @@ http://localhost:8000
 
 ```bash
 # Modelo
-MODEL_PATH=athena_training_2phase_optimized/models/phase1_complete/athena_phase1_tesla_t4/weights/best.pt
+MODEL_PATH=models/best.pt
+MODEL_CONF_THRESH=0.25
+MODEL_IOU_THRESH=0.45
 
 # API
 API_HOST=0.0.0.0
-API_PORT=8000
+API_PORT=3000
 
 # Vídeo
 VIDEO_SOURCE=0  # 0 = webcam padrão
+RTSP_URL=rtsp://user:pass@ip:port/stream  # Para RTSP
 VIDEO_FPS=30
-VIDEO_WIDTH=640
-VIDEO_HEIGHT=480
 
-# Detecção
-MODEL_CONF_THRESH=0.35
-MODEL_IOU_THRESH=0.45
-MODEL_MAX_DETECTIONS=50
+# EPIs Requeridos
+REQUIRED_EPIS=helmet,safety-vest,gloves,glasses
 ```
 
 ### Parâmetros do Modelo
 
-- **Confidence Threshold**: Limite mínimo de confiança para detecções
-- **IoU Threshold**: Limite de sobreposição para supressão de detecções duplicadas
-- **Max Detections**: Número máximo de detecções por frame
+- **Confidence Threshold**: Limite mínimo de confiança para detecções (padrão: 0.25)
+- **IoU Threshold**: Limite de sobreposição para supressão de detecções duplicadas (padrão: 0.45)
+- **Max Detections**: Número máximo de detecções por frame (padrão: 300)
 
-## 📁 Estrutura do Projeto
+## 🎯 Modelo Treinado
 
-```
-Atena/
-├── backend/                 # Backend Python/FastAPI
-│   ├── api.py             # API principal
-│   ├── detection.py       # Sistema de detecção
-│   ├── config.py          # Configurações
-│   └── utils.py           # Utilitários
-├── frontend/               # Interface web
-│   ├── index.html         # Página principal
-│   ├── js/                # JavaScript
-│   └── styles/            # CSS
-├── yolov5/                 # Framework YOLOv5
-│   └── runs/train/        # Modelos treinados
-├── start_api.py           # Script de inicialização
-└── requirements.txt        # Dependências Python
-```
-
-## 🎯 Modelos Treinados
-
-O sistema automaticamente detecta e usa o melhor modelo disponível em `yolov5/runs/train/`.
-
-### Modelo Atual
-- **Nome**: `athena_phase1_tesla_t4` (Fase 1 Otimizado)
-- **Arquivo**: `best.pt`
-- **Tamanho**: ~14MB
+- **Nome**: `best.pt` (Fase 1 Otimizado)
+- **Arquivo**: `models/best.pt`
 - **Classes**: 17 classes de EPIs + person
-- **Performance**: 99.58% taxa de detecção, 84.18% confiança média
+- **Performance**: 
+  - Precision: 89.9%
+  - Recall: 76.4%
+  - mAP50: 83.2%
+  - mAP50-95: 63.6%
 
 ## 🌐 Endpoints da API
 
 ### Principais
-- `GET /` - Status da API
+- `GET /` - Redireciona para frontend
 - `GET /health` - Verificação de saúde
+- `GET /status` - Status do sistema
 - `GET /stream.mjpg` - Stream de vídeo MJPEG
-- `GET /events/detections` - SSE para detecções
+- `GET /events/detections` - SSE para detecções em tempo real
 - `GET /stats` - Estatísticas atuais
-- `POST /snapshot` - Capturar snapshot
+- `POST /api/detect-frame` - Detecção em frame individual
 
-### Histórico
-- `GET /history` - Histórico de detecções
-- `GET /history/stats` - Estatísticas do histórico
-- `GET /history/trend` - Tendências de compliance
+### Vídeos
+- `POST /api/videos/upload` - Upload de vídeo
+- `GET /api/videos/list` - Lista de vídeos
+- `GET /api/videos/{id}/status` - Status do processamento
+- `GET /api/videos/{id}/results` - Resultados da detecção
+- `GET /api/videos/{id}/report` - Relatório do vídeo
+- `GET /api/videos/{id}/report/csv` - Exportar relatório CSV
+- `POST /api/videos/realtime/report` - Gerar relatório em tempo real
 
 ### Configuração
 - `GET /config` - Configurações atuais
 - `PUT /config` - Atualizar configurações
+- `GET /classes` - Classes disponíveis do modelo
+- `GET /classes/enabled` - Classes habilitadas
+- `PUT /classes/enabled` - Atualizar classes habilitadas
+
+### Histórico
+- `GET /history` - Histórico de detecções
 
 ## 🎨 Interface Web
 
 ### Views Disponíveis
-1. **Dashboard**: Monitoramento em tempo real
-2. **Relatório**: Análise estatística
-3. **Histórico**: Registro de detecções
-4. **Status**: Performance do sistema
-5. **Configurações**: Ajuste de parâmetros
+1. **Dashboard**: Monitoramento em tempo real com stream de vídeo
+2. **Vídeos**: Upload e visualização de vídeos processados
+3. **Relatório**: Análise estatística e relatórios dinâmicos
+4. **Histórico**: Registro de detecções
+5. **Status**: Monitoramento do sistema (FPS, GPU, uptime)
+6. **Config**: Configurações do sistema
 
-### Funcionalidades
-- Stream de vídeo ao vivo
-- Overlay de detecções em tempo real
-- Contadores de EPIs detectados
-- Indicador de status de conexão
-- Sistema de snapshots
-- Navegação responsiva
+## 🔍 Sistema de Detecção
 
-## 🔍 Solução de Problemas
+O sistema detecta:
+- **Pessoas**: Detecção de pessoas no frame
+- **EPIs Presentes**: EPIs detectados e associados a pessoas
+- **EPIs Ausentes**: EPIs faltando (detecções virtuais "missing-*")
 
-### Erros Comuns
+### Classes Suportadas (17 classes)
+- person, helmet, safety-vest, gloves, glasses
+- ear, ear-mufs, face, face-guard, face-mask-medical
+- foot, tools, hands, head
+- medical-suit, shoes, safety-suit
 
-#### 1. Webcam não inicializa
-```bash
-# Verifique se a webcam está disponível
-python -c "import cv2; cap = cv2.VideoCapture(0); print(cap.isOpened())"
-```
+### Filtragem de EPIs Soltos
+O sistema filtra automaticamente EPIs que não estão associados a pessoas, garantindo que apenas EPIs usados por pessoas sejam contabilizados.
 
-#### 2. Modelo não carrega
-```bash
-# Verifique se o arquivo existe
-ls -la athena_training_2phase_optimized/models/phase1_complete/athena_phase1_tesla_t4/weights/best.pt
-```
+## 📊 Relatórios Dinâmicos
 
-#### 3. Frontend não conecta
-```bash
-# Verifique se a API está rodando
-curl http://localhost:8000/health
-```
+Os relatórios são gerados dinamicamente baseados em todas as classes detectadas pelo modelo, sem hardcoding de EPIs específicos. Incluem:
+- Estatísticas por classe (positivas e negativas)
+- Compliance score
+- Exportação para CSV
 
-#### 4. Erros Alpine.js
-- Certifique-se de que o Alpine.js está carregando com `defer`
-- Verifique o console do navegador para erros JavaScript
+## 🛠️ Desenvolvimento
 
-### Logs
+### Ferramentas de Desenvolvimento
+- `dev/tools/` - Ferramentas de processamento de dados
+- `dev/scripts/` - Scripts de treinamento
+- `dev/tests/` - Testes
 
-Os logs são exibidos no terminal onde a API está rodando. Use `LOG_LEVEL=DEBUG` para mais detalhes.
+### Dados de Treinamento
+Arquivados em `archive/training_data/` para referência.
 
-## 📊 Performance
+## 📝 Notas
 
-### Métricas Típicas
-- **FPS**: 25-30 (dependendo do hardware)
-- **Latência**: <100ms
-- **Precisão**: >90% (com modelo treinado)
-- **Uso de Memória**: ~500MB-1GB
+- **GPU Obrigatória**: Este projeto requer GPU CUDA para funcionar adequadamente
+- **Modelo**: O modelo `best.pt` deve estar disponível em `models/best.pt` ou no caminho configurado
+- **RTSP**: Configure `RTSP_URL` para usar câmeras IP via RTSP
+- **Performance**: Ajuste `MODEL_CONF_THRESH` e thresholds por classe conforme necessário
 
-### Otimizações
-- Use GPU CUDA se disponível
-- Ajuste `VIDEO_FPS` conforme necessário
-- Configure `MODEL_MAX_DETECTIONS` adequadamente
+## 📄 Licença
 
-## 🤝 Contribuição
-
-1. Fork o projeto
-2. Crie uma branch para sua feature
-3. Commit suas mudanças
-4. Push para a branch
-5. Abra um Pull Request
-
-## 📝 Licença
-
-Este projeto está sob a licença MIT. Veja o arquivo LICENSE para detalhes.
-
-## 🙏 Agradecimentos
-
-- [Ultralytics](https://github.com/ultralytics/yolov5) - Framework YOLOv5
-- [FastAPI](https://fastapi.tiangolo.com/) - Framework web Python
-- [Alpine.js](https://alpinejs.dev/) - Framework JavaScript minimalista
-- [Tailwind CSS](https://tailwindcss.com/) - Framework CSS utilitário
-
-## 📞 Suporte
-
-Para suporte ou dúvidas:
-- Abra uma issue no GitHub
-- Consulte a documentação da API em `/docs`
-- Verifique os logs do sistema
-
----
-
-**Athena** - Protegendo vidas através da tecnologia 🤖🛡️
+[Adicione informações de licença aqui]

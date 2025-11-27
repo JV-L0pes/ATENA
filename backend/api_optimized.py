@@ -38,7 +38,10 @@ logger = logging.getLogger(__name__)
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 try:
-    from athena_realtime_optimized import AthenaDetectionSystemOptimized, AthenaPhase1Detector
+    # Importar do core consolidado
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from core.detector import AthenaDetectionSystemOptimized, AthenaPhase1Detector
     # Verificar se as classes foram importadas corretamente
     if not hasattr(AthenaPhase1Detector, 'setup_detector'):
         raise ImportError("AthenaPhase1Detector não tem método setup_detector")
@@ -441,7 +444,7 @@ class EPIDetectorOptimizedAPI:
         people_detections = [d for d in detections if d.get('class_name') == 'person']
         other_detections = [d for d in detections if d.get('class_name') != 'person']
         
-        # EPIs já foram filtrados no athena_realtime_optimized (só vêm associados a pessoas)
+        # EPIs já foram filtrados no core/detector.py (só vêm associados a pessoas)
         # Mas vamos garantir que só contamos EPIs que realmente estão associados
         
         for detection in detections:
