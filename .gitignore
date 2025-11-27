@@ -160,3 +160,6 @@ Thumbs.db
 
 venv_39
 datasets
+venv_py39
+athena_venv
+data

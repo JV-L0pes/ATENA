@@ -1,0 +1,13 @@
+﻿venv_py39/
+__pycache__/
+*.pyc
+.git/
+*.log
+runs/
+snapshots/
+backup_*/
+*.pt
+*.pth
+athena_deploy/
+test_ssh.ps1
+ssh_config_cursor
