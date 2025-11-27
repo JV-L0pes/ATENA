@@ -18,7 +18,10 @@ const CONFIG = {
             VIDEOS_STATUS: '/api/videos',
             VIDEOS_RESULTS: '/api/videos',
             VIDEOS_DOWNLOAD: '/api/videos',
-            VIDEOS_FORMATS: '/api/videos/formats'
+            VIDEOS_FORMATS: '/api/videos/formats',
+            VIDEO_REPORT: '/api/videos',
+            VIDEO_REPORT_CSV: '/api/videos',
+            REALTIME_REPORT: '/api/videos/realtime/report'
         }
     },
     UI: {
@@ -108,15 +111,31 @@ function athenaApp() {
         // Sistema de vídeos em tempo real
         currentVideo: null,
         currentVideoUrl: null,
+        currentVideoId: null,
         videoDimensions: { width: 0, height: 0 },
+        
+        // Sistema de Relatório
+        videoReport: null,
+        reportFilter: 'all',
+        reportPage: 0,
+        reportPageSize: 50,
+        
+        // Sistema de Logs de Detecção em Tempo Real
+        detectionLogs: [],
+        detectionLogsStartTime: null,
+        detectionLogsVideoId: null,
         detectionActive: false,
         detectionFPS: 0,
         currentDetections: [],
         realtimeStats: {
             total_pessoas: 0,
+            detections_by_class: {},
+            positive_detections: {},
+            negative_detections: {},
+            compliance_score: 0,
+            // Campos de compatibilidade (calculados dinamicamente)
             com_capacete: 0,
-            com_colete: 0,
-            compliance_score: 0
+            com_colete: 0
         },
         detectionInterval: null,
         lastDetectionTime: 0,
@@ -401,33 +420,24 @@ function athenaApp() {
                 boxElement.style.transition = 'opacity 0.3s ease-in-out';  // Transição suave
                 boxElement.style.opacity = '1';
                 
-                // Cor por compliance: pessoa sem capacete => vermelho; caso contrário, usa verde
-                const hasMissingHelmet = Array.isArray(detection.missing_epis) && detection.missing_epis.includes('helmet');
-                const isCompliant = detection.compliant === true || !hasMissingHelmet;
-                const isMissingHelmetClass = className.startsWith('missing-helmet');
+                // Lógica simplificada: Verde = tem EPI, Vermelho = sem EPI
+                const hasMissingEPI = Array.isArray(detection.missing_epis) && detection.missing_epis.length > 0;
+                const isCompliant = detection.compliant === true && !hasMissingEPI;
+                const isMissingClass = className.startsWith('missing-');
                 
-                // Cores baseadas no status do capacete
+                // Cores simplificadas: Verde ou Vermelho
                 let borderColor, bgColor, labelText;
                 
-                if (isMissingHelmetClass) {
-                    // Detecção virtual de capacete faltando = VERMELHO
+                if (isMissingClass || hasMissingEPI || !isCompliant) {
+                    // SEM EPI = VERMELHO
                     borderColor = '#ff0000';
                     bgColor = 'rgba(255, 0, 0, 0.2)';
-                    labelText = `Falta: Capacete`;
-                } else if (hasMissingHelmet) {
-                    // Pessoa sem capacete = VERMELHO
-                    borderColor = '#ff0000';
-                    bgColor = 'rgba(255, 0, 0, 0.15)';
-                    labelText = `Pessoa - Sem Capacete`;
-                } else if (isCompliant) {
-                    // Pessoa com capacete = VERDE
-                    borderColor = '#00ff00';
-                    bgColor = 'rgba(0, 255, 0, 0.15)';
-                    labelText = `Pessoa - Com Capacete`;
+                    const missingEPI = detection.missing_epi || detection.missing_epis?.[0] || 'EPI';
+                    labelText = `Sem ${missingEPI}`;
                 } else {
-                    // Outras detecções (face, head, etc.) = AZUL
-                    borderColor = '#0080ff';
-                    bgColor = 'rgba(0, 128, 255, 0.15)';
+                    // COM EPI = VERDE
+                    borderColor = '#00ff00';
+                    bgColor = 'rgba(0, 255, 0, 0.2)';
                     labelText = `${className} (${(confidence * 100).toFixed(1)}%)`;
                 }
                 
@@ -837,6 +847,118 @@ function athenaApp() {
                 return `${secs}s`;
             }
         },
+        
+        // Formatar timestamp
+        formatTimestamp(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        },
+        
+        // Todas as detecções filtradas (sem paginação)
+        get allFilteredReportDetections() {
+            if (!this.videoReport) return [];
+            
+            let detections = [];
+            
+            // Combinar detecções positivas e negativas
+            if (this.videoReport.positive_detections) {
+                detections = detections.concat(this.videoReport.positive_detections.map(d => ({
+                    ...d,
+                    type: 'positive'
+                })));
+            }
+            
+            if (this.videoReport.negative_detections) {
+                detections = detections.concat(this.videoReport.negative_detections.map(d => ({
+                    ...d,
+                    type: 'negative',
+                    missing_epi: d.missing_epi || d.class_name.replace('missing-', '')
+                })));
+            }
+            
+            // Se não houver positive/negative_detections, usar detections direto (relatório em tempo real)
+            if (detections.length === 0 && this.videoReport.detections) {
+                detections = this.videoReport.detections.map(d => ({
+                    ...d,
+                    type: d.type || (d.class_name?.startsWith('missing-') ? 'negative' : 'positive'),
+                    missing_epi: d.missing_epi || (d.class_name?.startsWith('missing-') ? d.class_name.replace('missing-', '') : null)
+                }));
+            }
+            
+            // Aplicar filtro
+            if (this.reportFilter === 'positive') {
+                detections = detections.filter(d => d.type === 'positive');
+            } else if (this.reportFilter === 'negative') {
+                detections = detections.filter(d => d.type === 'negative');
+            }
+            
+            // Ordenar por frame e timestamp
+            detections.sort((a, b) => {
+                if (a.frame_number !== b.frame_number) {
+                    return a.frame_number - b.frame_number;
+                }
+                return a.timestamp - b.timestamp;
+            });
+            
+            return detections;
+        },
+        
+        // Detecções filtradas do relatório (com paginação)
+        get filteredReportDetections() {
+            const all = this.allFilteredReportDetections;
+            
+            // Paginação
+            const start = this.reportPage * this.reportPageSize;
+            const end = start + this.reportPageSize;
+            return all.slice(start, end);
+        },
+        
+        // Carregar relatório do vídeo
+        async loadVideoReport(videoId) {
+            try {
+                this.currentVideoId = videoId;
+                const response = await fetch(`${CONFIG.API.BASE_URL}${CONFIG.API.ENDPOINTS.VIDEO_REPORT}/${videoId}/report`);
+                
+                if (!response.ok) {
+                    throw new Error('Erro ao carregar relatório');
+                }
+                
+                const data = await response.json();
+                this.videoReport = data.report;
+                this.reportPage = 0; // Resetar página
+                
+                this.showToast('Relatório carregado com sucesso!', 'success');
+            } catch (error) {
+                console.error('Erro ao carregar relatório:', error);
+                this.showToast('Erro ao carregar relatório', 'error');
+            }
+        },
+        
+        // Exportar relatório para CSV
+        async exportReportCSV() {
+            if (!this.currentVideoId) {
+                this.showToast('Nenhum vídeo selecionado', 'warning');
+                return;
+            }
+            
+            try {
+                const url = `${CONFIG.API.BASE_URL}${CONFIG.API.ENDPOINTS.VIDEO_REPORT}/${this.currentVideoId}/report/csv`;
+                
+                // Criar link temporário para download
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `athena-report-${this.currentVideoId}.csv`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                this.showToast('CSV exportado com sucesso!', 'success');
+            } catch (error) {
+                console.error('Erro ao exportar CSV:', error);
+                this.showToast('Erro ao exportar CSV', 'error');
+            }
+        },
 
         // Sistema de notificações toast
         showToast(message, type = 'info') {
@@ -891,17 +1013,10 @@ function athenaApp() {
 
         // ===== FUNÇÕES DE VÍDEO EM TEMPO REAL =====
 
-        // Carregar vídeo para detecção em tempo real
+        // Carregar vídeo para detecção em tempo real (como câmera ao vivo)
         loadVideoForRealtimeDetection(event) {
             const file = event.target.files[0];
             if (!file) return;
-
-            // Validar tamanho (500MB máximo)
-            const maxSize = 500 * 1024 * 1024;
-            if (file.size > maxSize) {
-                this.showToast('Arquivo muito grande. Máximo 500MB.', 'error');
-                return;
-            }
 
             // Validar tipo
             const supportedTypes = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v'];
@@ -918,15 +1033,147 @@ function athenaApp() {
             // Resetar estatísticas
             this.realtimeStats = {
                 total_pessoas: 0,
-                com_capacete: 0,
-                com_colete: 0,
+                detections_by_class: {},
+                epi_detections: {},
+                missing_epis: {},
                 compliance_score: 0
             };
             
             this.currentDetections = [];
             this.detectionActive = false;
+            this.videoReport = null; // Limpar relatório anterior
             
-            this.showToast('Vídeo carregado com sucesso!', 'success');
+            // Inicializar sistema de logs
+            this.detectionLogs = [];
+            this.detectionLogsStartTime = Date.now();
+            this.detectionLogsVideoId = `realtime-${Date.now()}`;
+            
+            this.showToast('Vídeo carregado! Clique em "Detectar" para iniciar.', 'success');
+        },
+        
+        // Logar detecção para relatório
+        logDetection(detection, frameNumber = null, timestamp = null) {
+            if (!this.detectionActive) return;
+            
+            const logEntry = {
+                id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                timestamp: timestamp || Date.now(),
+                frame_number: frameNumber || (this.videoPlayer ? Math.floor(this.videoPlayer.currentTime * 30) : 0),
+                video_time: this.videoPlayer ? this.videoPlayer.currentTime : 0,
+                class_name: detection.class_name || 'unknown',
+                confidence: detection.confidence || 0,
+                bbox: detection.bbox || [],
+                compliant: detection.compliant !== false,
+                missing_epis: detection.missing_epis || [],
+                missing_epi: detection.missing_epi || null,
+                type: detection.type || 'positive'
+            };
+            
+            this.detectionLogs.push(logEntry);
+            
+            // Limitar tamanho do log (manter últimos 10000 registros)
+            if (this.detectionLogs.length > 10000) {
+                this.detectionLogs = this.detectionLogs.slice(-10000);
+            }
+        },
+        
+        // Gerar relatório a partir dos logs
+        generateRealtimeReport() {
+            if (this.detectionLogs.length === 0) {
+                this.showToast('Nenhuma detecção registrada. Inicie a detecção primeiro.', 'warning');
+                return null;
+            }
+            
+            // Agrupar detecções por classe
+            const detectionsByClass = {};
+            const positiveByClass = {};
+            const negativeByClass = {};
+            let totalPeople = 0;
+            
+            this.detectionLogs.forEach(log => {
+                const className = log.class_name;
+                
+                // Contar por classe
+                detectionsByClass[className] = (detectionsByClass[className] || 0) + 1;
+                
+                if (className === 'person') {
+                    totalPeople++;
+                } else if (log.type === 'positive' && !className.startsWith('missing-')) {
+                    positiveByClass[className] = (positiveByClass[className] || 0) + 1;
+                } else if (log.type === 'negative' || className.startsWith('missing-')) {
+                    const missingEPI = log.missing_epi || className.replace('missing-', '');
+                    negativeByClass[missingEPI] = (negativeByClass[missingEPI] || 0) + 1;
+                }
+            });
+            
+            // Calcular estatísticas
+            const totalPositive = Object.values(positiveByClass).reduce((a, b) => a + b, 0);
+            const totalNegative = Object.values(negativeByClass).reduce((a, b) => a + b, 0);
+            
+            const report = {
+                video_id: this.detectionLogsVideoId,
+                created_at: new Date().toISOString(),
+                video_info: {
+                    name: this.currentVideo?.name || 'Vídeo em tempo real',
+                    duration: this.videoPlayer ? this.videoPlayer.duration : 0,
+                    total_frames: this.detectionLogs.length
+                },
+                statistics: {
+                    total_detections: this.detectionLogs.length,
+                    total_positive_detections: totalPositive,
+                    total_negative_detections: totalNegative,
+                    total_pessoas: totalPeople,
+                    positive_by_class: positiveByClass,
+                    negative_by_class: negativeByClass,
+                    detections_by_class: detectionsByClass,
+                    all_classes_detected: Object.keys(detectionsByClass),
+                    compliance_score: totalPeople > 0 ? 
+                        Math.round((totalPositive / (totalPositive + totalNegative)) * 100) : 0
+                },
+                detections: this.detectionLogs,
+                detection_summary: {
+                    start_time: this.detectionLogsStartTime,
+                    end_time: Date.now(),
+                    duration_ms: Date.now() - this.detectionLogsStartTime
+                }
+            };
+            
+            return report;
+        },
+        
+        // Salvar relatório em tempo real no backend
+        async saveRealtimeReport() {
+            const report = this.generateRealtimeReport();
+            if (!report) return;
+            
+            try {
+                const response = await fetch(`${CONFIG.API.BASE_URL}${CONFIG.API.ENDPOINTS.REALTIME_REPORT}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(report)
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Erro ao salvar relatório');
+                }
+                
+                const data = await response.json();
+                this.videoReport = data.report;
+                this.currentVideoId = data.video_id;
+                
+                this.showToast('Relatório gerado e salvo com sucesso!', 'success');
+                
+                // Navegar para a seção de relatório
+                this.setActiveView('relatorio');
+                
+                return data.report;
+            } catch (error) {
+                console.error('Erro ao salvar relatório:', error);
+                this.showToast('Erro ao salvar relatório', 'error');
+                return null;
+            }
         },
 
         // Quando o vídeo é carregado
@@ -969,7 +1216,7 @@ function athenaApp() {
 
         // Alternar detecção
         toggleDetection() {
-            if (!this.currentVideoUrl) {
+            if (!this.currentVideoUrl || !this.videoPlayer) {
                 this.showToast('Selecione um vídeo antes de iniciar a detecção', 'warning');
                 return;
             }
@@ -978,8 +1225,10 @@ function athenaApp() {
             if (this.detectionActive) {
                 this.showToast('Detecção iniciada', 'success');
                 this.lastDetectionTime = performance.now();
-                this.openVideoWS();
-                // usar requestVideoFrameCallback para melhor cadência quando disponível
+                this.lastFpsTick = performance.now();
+                this.framesThisSecond = 0;
+                
+                // Usar requestVideoFrameCallback para melhor cadência quando disponível
                 if (typeof this.videoPlayer.requestVideoFrameCallback === 'function') {
                     const loop = () => {
                         if (!this.detectionActive) return;
@@ -992,11 +1241,21 @@ function athenaApp() {
                         this.videoPlayer.requestVideoFrameCallback(loop);
                     };
                     this.videoPlayer.requestVideoFrameCallback(loop);
+                } else {
+                    // Fallback: usar timeupdate do vídeo
+                    this.detectionInterval = setInterval(() => {
+                        if (this.detectionActive && !this.inFlightDetection) {
+                            this.detectInCurrentFrame();
+                        }
+                    }, 1000 / (this.dynamicTargetFps || CONFIG.DETECTION.TARGET_FPS));
                 }
             } else {
                 this.showToast('Detecção pausada', 'info');
                 this.clearDetections();
-                this.closeVideoWS();
+                if (this.detectionInterval) {
+                    clearInterval(this.detectionInterval);
+                    this.detectionInterval = null;
+                }
             }
         },
 
@@ -1049,17 +1308,18 @@ function athenaApp() {
             this.inFlightDetection = false;
         },
 
-        // Detectar no frame atual
+        // Detectar no frame atual usando REST API
         async detectInCurrentFrame() {
             if (!this.videoPlayer || !this.videoOverlay) return;
-            if (!this.wsConnected || !this.videoWS) return;
+            if (this.inFlightDetection) return;
 
             try {
-                if (this.inFlightDetection) return;
                 this.inFlightDetection = true;
+                
                 // Capturar frame atual do vídeo
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
+                
                 // Reduzir resolução para acelerar upload/inferência (máx 640px no maior lado)
                 const maxSide = CONFIG.DETECTION.MAX_FRAME_WIDTH || 640;
                 const vw = this.videoDimensions.width;
@@ -1067,24 +1327,78 @@ function athenaApp() {
                 const scale = Math.min(1, maxSide / Math.max(vw, vh));
                 canvas.width = Math.round(vw * scale);
                 canvas.height = Math.round(vh * scale);
-                // guardar o tamanho do frame enviado para escalar boxes depois
+                
+                // Guardar o tamanho do frame enviado para escalar boxes depois
                 this.lastSentFrameSize = { width: canvas.width, height: canvas.height };
                 
                 ctx.drawImage(this.videoPlayer, 0, 0, canvas.width, canvas.height);
                 
-                // Converter para blob e enviar via WS
+                // Converter para blob e enviar via REST API
                 canvas.toBlob(async (blob) => {
                     try {
-                        const buffer = await blob.arrayBuffer();
-                        this.wsLastSendAt = performance.now();
-                        this.videoWS.send(buffer);
-                    } catch (_) {
+                        const formData = new FormData();
+                        formData.append('image', blob, 'frame.jpg');
+                        
+                        const startTime = performance.now();
+                        const response = await fetch(`${CONFIG.API.BASE_URL}/api/detect-frame`, {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error('Erro na detecção');
+                        }
+                        
+                        const data = await response.json();
+                        const rtt = performance.now() - startTime;
+                        this.wsRTTms = rtt;
+                        
+                        // Processar detecções recebidas
+                        if (data.detections) {
+                            // Usar dados do backend diretamente (já inclui missing_epis, compliant, etc.)
+                            this.currentDetections = data.detections.map(det => ({
+                                bbox: det.bbox || [],
+                                class_name: det.class_name || 'unknown',
+                                confidence: det.confidence || 0,
+                                compliant: det.compliant !== undefined ? det.compliant : true,
+                                missing_epis: det.missing_epis || [],
+                                missing_epi: det.missing_epi || null,
+                                type: det.type || 'positive'
+                            }));
+                            
+                            // Logar todas as detecções para relatório
+                            if (this.detectionActive && this.videoPlayer) {
+                                const frameNumber = Math.floor(this.videoPlayer.currentTime * 30);
+                                this.currentDetections.forEach(detection => {
+                                    this.logDetection(detection, frameNumber);
+                                });
+                            }
+                            
+                            this.updateRealtimeStats();
+                            this.drawDetections();
+                            
+                            // Atualizar FPS
+                            const now = performance.now();
+                            if (now - this.lastFpsTick >= 1000) {
+                                this.detectionFPS = this.framesThisSecond;
+                                this.framesThisSecond = 0;
+                                this.lastFpsTick = now;
+                            } else {
+                                this.framesThisSecond++;
+                            }
+                        }
+                        
+                        this.inFlightDetection = false;
+                        this.adaptNetwork();
+                        
+                    } catch (error) {
+                        console.error('Erro na detecção:', error);
                         this.inFlightDetection = false;
                     }
                 }, 'image/jpeg', (this.dynamicJpegQuality || CONFIG.DETECTION.JPEG_QUALITY || 0.6));
                 
             } catch (error) {
-                console.error('Erro na detecção:', error);
+                console.error('Erro na captura do frame:', error);
                 this.inFlightDetection = false;
             }
         },
@@ -1112,31 +1426,48 @@ function athenaApp() {
             this.resizeOverlayToVideo();
         },
 
-        // Atualizar estatísticas em tempo real
+        // Atualizar estatísticas em tempo real - TOTALMENTE DINÂMICO (sem hardcode)
         updateRealtimeStats() {
             const stats = {
                 total_pessoas: 0,
-                com_capacete: 0,
-                com_colete: 0,
+                detections_by_class: {},
+                positive_detections: {},
+                negative_detections: {},
                 compliance_score: 0
             };
             
             this.currentDetections.forEach(detection => {
-                if (detection.class_name === 'person') {
+                const class_name = detection.class_name || '';
+                
+                // Contar por classe (qualquer classe que o modelo detectar)
+                stats.detections_by_class[class_name] = (stats.detections_by_class[class_name] || 0) + 1;
+                
+                if (class_name === 'person') {
                     stats.total_pessoas++;
-                } else if (['helmet', 'safety_helmet', 'ear', 'ear-mufs'].includes(detection.class_name)) {
-                    stats.com_capacete++;
-                } else if (['vest', 'safety_vest', 'safety-suit', 'medical-suit'].includes(detection.class_name)) {
-                    stats.com_colete++;
+                } else if (class_name.startsWith('missing-')) {
+                    // Detecção negativa (EPI faltando)
+                    const missing_epi = class_name.replace('missing-', '');
+                    stats.negative_detections[missing_epi] = (stats.negative_detections[missing_epi] || 0) + 1;
+                } else {
+                    // Detecção positiva (qualquer classe detectada)
+                    stats.positive_detections[class_name] = (stats.positive_detections[class_name] || 0) + 1;
                 }
             });
             
-            // Calcular compliance score
-            if (stats.total_pessoas > 0) {
-                const totalEPIs = stats.com_capacete + stats.com_colete;
-                const maxPossibleEPIs = stats.total_pessoas * 2; // Capacete + Colete
-                stats.compliance_score = Math.round((totalEPIs / maxPossibleEPIs) * 100);
+            // Calcular compliance score baseado em positivas vs negativas
+            const total_positive = Object.values(stats.positive_detections).reduce((a, b) => a + b, 0);
+            const total_negative = Object.values(stats.negative_detections).reduce((a, b) => a + b, 0);
+            const total_all = total_positive + total_negative;
+            
+            if (total_all > 0) {
+                stats.compliance_score = Math.round((total_positive / total_all) * 100);
+            } else {
+                stats.compliance_score = 0;
             }
+            
+            // Manter campos antigos para compatibilidade com UI existente (calculados dinamicamente)
+            stats.com_capacete = stats.positive_detections['helmet'] || 0;
+            stats.com_colete = stats.positive_detections['safety-vest'] || 0;
             
             this.realtimeStats = stats;
         },
@@ -1151,28 +1482,6 @@ function athenaApp() {
             ctx.clearRect(0, 0, this.videoOverlay.width, this.videoOverlay.height);
             
             // Cores para diferentes classes
-            const colors = {
-                'person': '#00ff00',
-                'helmet': '#0000ff',
-                'vest': '#ff0000',
-                'safety_helmet': '#0000ff',
-                'safety_vest': '#ff0000',
-                'ear': '#ffff00',
-                'ear-mufs': '#ffa500',
-                'face': '#800080',
-                'face-guard': '#00ffff',
-                'face-mask-medical': '#ffc0cb',
-                'foot': '#a52a2a',
-                'tools': '#808080',
-                'glasses': '#008000',
-                'gloves': '#ff1493',
-                'hands': '#ff4500',
-                'head': '#4b0082',
-                'medical-suit': '#006400',
-                'shoes': '#8b4513',
-                'safety-suit': '#00008b'
-            };
-            
             // fator de escala considerando letterbox/pillarbox (object-fit)
             const canvasW = this.videoOverlay.width;
             const canvasH = this.videoOverlay.height;
@@ -1189,26 +1498,48 @@ function athenaApp() {
             const scaleY = displayH / sentH;
 
             this.currentDetections.forEach(detection => {
+                if (!detection.bbox || detection.bbox.length < 4) return;
+                
                 const [bx1, by1, bx2, by2] = detection.bbox;
-                // escalar coords do frame processado para o retângulo visível do vídeo
+                // Escalar coordenadas do frame processado para o retângulo visível do vídeo
                 const x1 = offsetX + bx1 * scaleX;
                 const y1 = offsetY + by1 * scaleY;
                 const x2 = offsetX + bx2 * scaleX;
                 const y2 = offsetY + by2 * scaleY;
-                const class_name = detection.class_name;
-                const confidence = detection.confidence;
-                const color = colors[class_name] || '#ffffff';
+                const class_name = detection.class_name || 'unknown';
+                const confidence = detection.confidence || 0;
                 
-                // Desenhar bounding box
+                // Lógica simplificada: Verde = tem EPI, Vermelho = sem EPI
+                const hasMissingEPI = Array.isArray(detection.missing_epis) && detection.missing_epis.length > 0;
+                const isCompliant = detection.compliant !== false && !hasMissingEPI;
+                const isMissingClass = class_name.startsWith('missing-');
+                
+                // Determinar cor: Verde ou Vermelho
+                const color = (isMissingClass || hasMissingEPI || !isCompliant) ? '#ff0000' : '#00ff00';
+                
+                // Desenhar bounding box (mais espessa para melhor visibilidade)
                 ctx.strokeStyle = color;
-                ctx.lineWidth = 2;
+                ctx.lineWidth = 3;
                 ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
                 
-                // Desenhar label
-                const label = `${class_name}: ${(confidence * 100).toFixed(1)}%`;
+                // Desenhar label com fundo para melhor legibilidade
+                let label;
+                if (isMissingClass || hasMissingEPI) {
+                    const missingEPI = detection.missing_epi || detection.missing_epis?.[0] || 'EPI';
+                    label = `Sem ${missingEPI}`;
+                } else {
+                    label = `${class_name}: ${(confidence * 100).toFixed(0)}%`;
+                }
+                
+                // Fundo do label
+                ctx.font = 'bold 14px Arial';
+                const metrics = ctx.measureText(label);
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                ctx.fillRect(x1, y1 - 22, metrics.width + 8, 20);
+                
+                // Texto do label
                 ctx.fillStyle = color;
-                ctx.font = '14px Arial';
-                ctx.fillText(label, x1, y1 - 5);
+                ctx.fillText(label, x1 + 4, y1 - 6);
             });
         },
 

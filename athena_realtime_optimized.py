@@ -46,23 +46,37 @@ class AthenaRealtimeDetector:
         self.device = None
         self.is_initialized = False
         
-        # Configurações ultra-otimizadas para tempo real
+        # Configurações otimizadas para tempo real com precisão
+        # Thresholds ajustados para detectar pessoas e EPIs corretamente
         self.config = {
-            'conf_threshold': 0.5,  # Threshold aumentado para maior precisão
+            'conf_threshold': 0.25,  # Threshold base reduzido para detectar melhor
             'iou_threshold': 0.45,
-            'max_detections': 100,   # Limite maior para modelo de 17 classes
+            'max_detections': 300,   # Limite maior para modelo de 17 classes
             'frame_skip': 2,        # Processar apenas 1 a cada 2 frames
             'resize_factor': 0.5,   # Reduzir resolução para velocidade
             'batch_size': 1,        # Processar 1 frame por vez
             'warmup_frames': 5       # Frames de aquecimento
         }
-        # Limiares por classe (podem ser ajustados por env futuramente)
+        # Limiares por classe (thresholds ajustados para precisão - modelo bem treinado)
+        # Classes mais críticas podem ter thresholds mais altos
         self.class_thresholds: Dict[str, float] = {
-            'helmet': 0.55,
-            'glasses': 0.60,
-            'safety-vest': 0.50,
-            'gloves': 0.60,
-            'ear-mufs': 0.60,
+            'person': 0.25,         # Reduzido para detectar pessoas melhor (classe mais importante)
+            'helmet': 0.30,         # EPIs críticos
+            'glasses': 0.25,
+            'safety-vest': 0.30,
+            'gloves': 0.25,
+            'ear-mufs': 0.25,
+            'ear': 0.25,
+            'face': 0.30,           # Face precisa de mais confiança
+            'face-guard': 0.25,
+            'face-mask-medical': 0.25,
+            'foot': 0.25,
+            'tools': 0.30,          # Tools podem ser confundidos com outros objetos
+            'hands': 0.25,
+            'head': 0.30,           # Head reduzido para detectar melhor
+            'medical-suit': 0.25,
+            'shoes': 0.25,
+            'safety-suit': 0.25,
         }
         
         # EPIs requeridos (configurável via env: REQUIRED_EPIS=helmet,safety-vest,gloves,glasses)
@@ -163,8 +177,9 @@ class AthenaRealtimeDetector:
             
             # Configurações de inferência otimizadas
             self.model.overrides = {
-                'conf': self.config['conf_threshold'],
+                'conf': self.config['conf_threshold'],  # Threshold base
                 'iou': self.config['iou_threshold'],
+                'verbose': False,
                 'max_det': self.config['max_detections'],
                 'verbose': False,
                 'half': True if self.device.type == 'cuda' else False,  # FP16 para GPU
@@ -228,9 +243,16 @@ class AthenaRealtimeDetector:
                 else:
                     frame_small = frame
                 
-                # Detecção ultra-rápida
+                # Detecção com threshold de confiança aplicado
                 with torch.no_grad():
-                    results = self.model(frame_small, verbose=False, imgsz=640)
+                    # Aplicar threshold de confiança no modelo para filtrar falsos positivos
+                    results = self.model(
+                        frame_small,
+                        conf=self.config['conf_threshold'],  # Threshold base aplicado no modelo
+                        iou=self.config['iou_threshold'],
+                        verbose=False,
+                        imgsz=640
+                    )
                 
                 # Processar resultados
                 detections = self._process_results(results, frame.shape)
@@ -243,6 +265,9 @@ class AthenaRealtimeDetector:
 
                 # Avaliar compliance (associar EPIs a pessoas e inferir ausências)
                 detections, violations = self._evaluate_compliance(detections)
+                
+                # FILTRAR EPIs soltos - só manter EPIs associados a pessoas
+                detections = self._filter_orphan_epis(detections)
                 
                 # Desenhar resultados
                 processed_frame = self._draw_detections(frame, detections)
@@ -278,84 +303,182 @@ class AthenaRealtimeDetector:
         """Processa resultados do modelo"""
         detections = []
         
-        if results and len(results) > 0:
-            result = results[0]
-            
-            if result.boxes is not None and len(result.boxes) > 0:
-                boxes = result.boxes.xyxy.cpu().numpy()
-                confidences = result.boxes.conf.cpu().numpy()
-                class_ids = result.boxes.cls.cpu().numpy().astype(int)
-                
-                for i, (box, conf, cls) in enumerate(zip(boxes, confidences, class_ids)):
-                    if 0 <= int(cls) < len(self.class_names):
-                        x1, y1, x2, y2 = box
-                        class_name = self.class_names[int(cls)]
-                        # Filtrar por threshold por classe e classes habilitadas
-                        thr = max(self.config['conf_threshold'], self.class_thresholds.get(class_name, 0.0))
-                        if conf >= thr and class_name in self.enabled_classes:
-                            detection = {
-                                'bbox': [int(x1), int(y1), int(x2), int(y2)],
-                                'confidence': float(conf),
-                                'class_name': class_name,
-                                'class_id': int(cls),
-                                'frame_id': self.frame_count,
-                                'timestamp': time.time()
-                            }
-                            detections.append(detection)
-                            
-                            # Log detalhado para debug
-                            if self.frame_count % 30 == 0:  # Log a cada 30 frames
-                                logger.info(f"🔍 Detecção: {class_name} (ID: {int(cls)}, conf: {conf:.3f})")
+        if not results or len(results) == 0:
+            logger.debug("⚠️ Nenhum resultado do modelo")
+            return detections
         
+        result = results[0]
+        
+        if result.boxes is None or len(result.boxes) == 0:
+            logger.debug("⚠️ Nenhuma caixa detectada pelo modelo")
+            return detections
+        
+        boxes = result.boxes.xyxy.cpu().numpy()
+        confidences = result.boxes.conf.cpu().numpy()
+        class_ids = result.boxes.cls.cpu().numpy().astype(int)
+        
+        logger.debug(f"📦 Boxes brutas do modelo: {len(boxes)}")
+        logger.debug(f"📊 Confianças: min={confidences.min():.3f}, max={confidences.max():.3f}, mean={confidences.mean():.3f}")
+        logger.debug(f"🏷️ Classes detectadas: {set(class_ids)}")
+        
+        filtered_count = 0
+        for i, (box, conf, cls) in enumerate(zip(boxes, confidences, class_ids)):
+            if 0 <= int(cls) < len(self.class_names):
+                x1, y1, x2, y2 = box
+                class_name = self.class_names[int(cls)]
+                # Filtrar por threshold por classe (thresholds mais altos para precisão)
+                # O modelo já aplicou conf_threshold, mas aplicamos threshold por classe adicional
+                thr = self.class_thresholds.get(class_name, self.config['conf_threshold'])
+                
+                if conf < thr:
+                    filtered_count += 1
+                    if self.frame_count % 30 == 0:
+                        logger.debug(f"🚫 Filtrado: {class_name} (conf={conf:.3f} < thr={thr:.3f})")
+                    continue
+                
+                if class_name not in self.enabled_classes:
+                    filtered_count += 1
+                    if self.frame_count % 30 == 0:
+                        logger.debug(f"🚫 Classe desabilitada: {class_name}")
+                    continue
+                
+                detection = {
+                    'bbox': [int(x1), int(y1), int(x2), int(y2)],
+                    'confidence': float(conf),
+                    'class_name': class_name,
+                    'class_id': int(cls),
+                    'frame_id': self.frame_count,
+                    'timestamp': time.time()
+                }
+                detections.append(detection)
+                
+                # Log detalhado para debug
+                if self.frame_count % 30 == 0:  # Log a cada 30 frames
+                    logger.info(f"✅ Detecção: {class_name} (conf={conf:.3f}, thr={thr:.3f})")
+            else:
+                logger.warning(f"⚠️ Class ID {int(cls)} fora do range [0, {len(self.class_names)})")
+        
+        if filtered_count > 0 and self.frame_count % 30 == 0:
+            logger.debug(f"🚫 Total filtrado: {filtered_count}/{len(boxes)}")
+        
+        logger.debug(f"✅ Detecções finais: {len(detections)}")
         return detections
     
+    def _filter_orphan_epis(self, detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filtra EPIs soltos (não associados a pessoas).
+        Só mantém: pessoas, EPIs associados a pessoas, e detecções virtuais missing-*
+        """
+        if not detections:
+            return detections
+        
+        # Identificar pessoas
+        persons = [d for d in detections if d.get('class_name') == 'person']
+        if not persons:
+            # Se não há pessoas, retornar apenas detecções virtuais missing-* (se houver)
+            return [d for d in detections if d.get('class_name', '').startswith('missing-')]
+        
+        # Criar bounding boxes de pessoas para verificação de overlap
+        person_boxes = [p['bbox'] for p in persons]
+        
+        def bbox_center(b):
+            x1, y1, x2, y2 = b
+            return (int((x1 + x2) / 2), int((y1 + y2) / 2))
+        
+        def center_inside(center, box):
+            cx, cy = center
+            x1, y1, x2, y2 = box
+            return x1 <= cx <= x2 and y1 <= cy <= y2
+        
+        def iou(a, b):
+            ax1, ay1, ax2, ay2 = a
+            bx1, by1, bx2, by2 = b
+            inter_x1, inter_y1 = max(ax1, bx1), max(ay1, by1)
+            inter_x2, inter_y2 = min(ax2, bx2), min(ay2, by2)
+            inter_w, inter_h = max(0, inter_x2 - inter_x1), max(0, inter_y2 - inter_y1)
+            inter = inter_w * inter_h
+            area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+            area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+            union = area_a + area_b - inter
+            return inter / union if union > 0 else 0.0
+        
+        # Filtrar detecções
+        filtered = []
+        
+        for detection in detections:
+            class_name = detection.get('class_name', '')
+            
+            # Sempre manter: pessoas e detecções virtuais missing-*
+            if class_name == 'person' or class_name.startswith('missing-'):
+                filtered.append(detection)
+                continue
+            
+            # Para outras classes (EPIs, partes do corpo, etc.):
+            # Só manter se estiver associado a uma pessoa
+            epi_bbox = detection.get('bbox', [])
+            if len(epi_bbox) < 4:
+                continue
+            
+            # Verificar se o EPI está dentro ou próximo de alguma pessoa
+            epi_center = bbox_center(epi_bbox)
+            associated = False
+            
+            for person_box in person_boxes:
+                # Verificar se o centro do EPI está dentro da pessoa
+                if center_inside(epi_center, person_box):
+                    associated = True
+                    break
+                # Ou verificar se há overlap significativo (IoU > 0.1)
+                if iou(epi_bbox, person_box) > 0.1:
+                    associated = True
+                    break
+            
+            if associated:
+                filtered.append(detection)
+            else:
+                # EPI solto - não adicionar
+                logger.debug(f"🚫 EPI solto filtrado: {class_name} (não associado a pessoa)")
+        
+        return filtered
+    
     def _draw_detections(self, frame, detections):
-        """Desenha detecções no frame"""
+        """Desenha detecções no frame - Verde = tem EPI, Vermelho = sem EPI"""
         frame_copy = frame.copy()
         
-        # Cores otimizadas para modelo best.pt (17 classes)
-        colors = {
-            'person': (0, 255, 0),        # Verde para pessoas
-            'helmet': (255, 0, 0),        # Vermelho para capacetes
-            'safety-vest': (0, 0, 255),    # Azul para coletes de segurança
-            'gloves': (255, 165, 0),      # Laranja para luvas
-            'glasses': (128, 0, 128),     # Roxo para óculos
-            'hands': (255, 192, 203),     # Rosa para mãos
-            'head': (255, 255, 0),        # Amarelo para cabeça
-            'face': (0, 255, 255),        # Ciano para rosto
-            'foot': (165, 42, 42),        # Marrom para pés
-            'shoes': (64, 224, 208),      # Turquesa para sapatos
-            'tools': (255, 20, 147),      # Rosa choque para ferramentas
-            'ear': (50, 205, 50),         # Verde lima para orelhas
-            'ear-mufs': (255, 69, 0),     # Vermelho laranja para protetores
-            'face-guard': (138, 43, 226), # Azul violeta para protetor facial
-            'face-mask-medical': (0, 191, 255), # Azul profundo para máscara médica
-            'medical-suit': (255, 105, 180), # Rosa quente para macacão médico
-            'safety-suit': (34, 139, 34), # Verde floresta para macacão de segurança
-            'other': (255, 255, 255)      # Branco para outros
-        }
+        # Cores simplificadas: Verde = tem EPI, Vermelho = sem EPI
+        COLOR_GREEN = (0, 255, 0)   # BGR: Verde = tem EPI
+        COLOR_RED = (0, 0, 255)     # BGR: Vermelho = sem EPI
         
         for detection in detections:
             x1, y1, x2, y2 = detection['bbox']
             class_name = detection['class_name']
             confidence = detection['confidence']
             
-            # Exibir apenas boxes cirúrgicos (missing-*) no stream
-            if not (isinstance(class_name, str) and class_name.startswith('missing-')):
-                continue
+            # Determinar cor: Verde ou Vermelho
+            has_missing_epi = detection.get('missing_epis', []) or detection.get('type') == 'negative'
+            is_missing_class = isinstance(class_name, str) and class_name.startswith('missing-')
+            is_compliant = detection.get('compliant', True) and not has_missing_epi
             
-            # Cor fixa vermelha para ausências
-            color = (0, 0, 255)
+            if is_missing_class or has_missing_epi or not is_compliant:
+                # SEM EPI = VERMELHO
+                color = COLOR_RED
+                if is_missing_class:
+                    missing_epi = class_name.replace('missing-', '').replace('-', ' ')
+                    label = f"Sem {missing_epi}"
+                else:
+                    missing_epi = detection.get('missing_epi', 'EPI')
+                    label = f"Sem {missing_epi}"
+            else:
+                # COM EPI = VERDE
+                color = COLOR_GREEN
+                label = f"{class_name}: {confidence:.2f}"
             
             # Desenhar bounding box
             cv2.rectangle(frame_copy, (x1, y1), (x2, y2), color, 2)
             
-            # Desenhar label (apenas para missing-*)
-            if confidence > 0.6:
-                nice = class_name.replace('missing-', '').replace('-', ' ')
-                label = f"Faltando: {nice}"
-                cv2.putText(frame_copy, label, (x1, y1 - 10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            # Desenhar label
+            cv2.putText(frame_copy, label, (x1, y1 - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         return frame_copy
 
@@ -369,21 +492,35 @@ class AthenaRealtimeDetector:
             return detections, []
 
         persons: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') == 'person']
-        # Mapear EPIs do modelo para nomes "lógicos" de compliance
-        epi_alias = {
-            'helmet': 'helmet',
-            'safety-vest': 'safety-vest',
-            'gloves': 'gloves',
-            'glasses': 'glasses',
-            'ear-mufs': 'ear-plugs'  # proteção auricular
-        }
-        # EPIs considerados = interseção entre requeridos e habilitados (usando alias)
+        
+        # DINÂMICO: Identificar todas as classes de EPI detectadas (exceto person e partes do corpo)
+        # Partes do corpo que não são EPIs: person, face, hands, head, foot, ear (sem proteção)
+        body_parts = {'person', 'face', 'hands', 'head', 'foot', 'ear'}
+        
+        # Todas as detecções que não são pessoa nem parte do corpo são consideradas EPIs
+        epis_raw: List[Dict[str, Any]] = [
+            d for d in detections 
+            if d.get('class_name') not in body_parts and not d.get('class_name', '').startswith('missing-')
+        ]
+        
+        # EPIs únicos detectados (dinâmico)
+        detected_epi_classes = set(d.get('class_name') for d in epis_raw)
+        
+        # EPIs requeridos = interseção entre requeridos (config) e detectados
         active_required = set()
-        for raw, alias in epi_alias.items():
-            if alias in self.required_epis and raw in self.enabled_classes:
-                active_required.add(alias)
-        # Detecções positivas de EPIs (originais)
-        epis_raw: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') in epi_alias.keys()]
+        for epi_class in detected_epi_classes:
+            # Se está nos requeridos E habilitados, adicionar
+            if epi_class in self.enabled_classes:
+                # Verificar se está nos required_epis (pode ter alias)
+                if epi_class in self.required_epis:
+                    active_required.add(epi_class)
+                # Mapear aliases comuns
+                alias_map = {
+                    'ear-mufs': 'ear-plugs',
+                    'ear': 'ear-plugs'
+                }
+                if epi_class in alias_map and alias_map[epi_class] in self.required_epis:
+                    active_required.add(alias_map[epi_class])
         # Suportes anatômicos
         supports_head: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') in ('head', 'face')]
         supports_hands: List[Dict[str, Any]] = [d for d in detections if d.get('class_name') == 'hands']
@@ -434,55 +571,64 @@ class AthenaRealtimeDetector:
             present = set()
             person_box = person['bbox']
 
-            # Associação por IoU para EPIs positivos
-            # capacete e óculos: exigir sobreposição com região da cabeça
+            # Associação DINÂMICA de EPIs a pessoas
+            # Para cada EPI detectado, verificar se está associado a esta pessoa
             for epi in epis_raw:
-                raw_name = epi['class_name']
-                alias = epi_alias.get(raw_name)
-                if alias is None:
+                epi_name = epi['class_name']
+                epi_bbox = epi['bbox']
+                epi_center = bbox_center(epi_bbox)
+                
+                # Verificar se o EPI está dentro da bounding box da pessoa
+                if not center_inside(epi_center, person_box):
                     continue
-                c = bbox_center(epi['bbox'])
-                if not center_inside(c, person_box):
-                    continue
-                if raw_name in ('helmet', 'glasses'):
-                    # precisa estar na região superior da pessoa
-                    if c[1] <= top_region_y:
-                        present.add(alias)
-                elif raw_name == 'safety-vest':
-                    present.add(alias)
-                elif raw_name == 'gloves':
-                    # Só conta "gloves" se cobrir uma mão detectada (evita falsos positivos no tronco)
+                
+                # EPIs que precisam estar na região superior (cabeça)
+                head_epis = {'helmet', 'glasses', 'face-guard', 'face-mask-medical', 'ear', 'ear-mufs'}
+                if epi_name in head_epis:
+                    # Verificar se está na região superior da pessoa
+                    if epi_center[1] <= top_region_y:
+                        present.add(epi_name)
+                # EPIs que precisam estar no tronco
+                elif epi_name in {'safety-vest', 'medical-suit', 'safety-suit'}:
+                    present.add(epi_name)
+                # EPIs que precisam estar nas mãos
+                elif epi_name in {'gloves'}:
+                    # Verificar se está próximo a mãos detectadas
                     matched = False
                     for h in supports_hands:
-                        if center_inside(bbox_center(h['bbox']), person_box) and iou(epi['bbox'], h['bbox']) > 0.3:
+                        if center_inside(bbox_center(h['bbox']), person_box) and iou(epi_bbox, h['bbox']) > 0.3:
                             matched = True
                             break
                     if matched:
-                        present.add('gloves')
-                elif raw_name == 'ear-mufs':
-                    # precisa cobrir uma orelha
-                    for earb in supports_ears:
-                        if center_inside(bbox_center(earb['bbox']), person_box) and iou(epi['bbox'], earb['bbox']) > 0.2:
-                            present.add('ear-plugs')
-                            break
-            # Equivalências: face-guard cobre glasses se sobrepor à cabeça
-            for fg in [d for d in detections if d.get('class_name') == 'face-guard']:
-                if center_inside(bbox_center(fg['bbox']), person_box):
-                    # requer suporte de cabeça visível
-                    if any(iou(fg['bbox'], s['bbox']) > 0.2 for s in supports_head):
-                        present.add('glasses')
+                        present.add(epi_name)
+                # EPIs que precisam estar nos pés
+                elif epi_name in {'shoes', 'foot'}:
+                    # Verificar se está na região inferior da pessoa
+                    bottom_region_y = py2 - int(0.25 * ph)
+                    if epi_center[1] >= bottom_region_y:
+                        present.add(epi_name)
+                # Outros EPIs: se está dentro da pessoa, considerar presente
+                else:
+                    present.add(epi_name)
 
             # Gating por visibilidade: só considerar ausências se a região/suporte estiver visível
-            visible_requirements = set()
-            if any(center_inside(bbox_center(s['bbox']), person_box) for s in supports_head):
-                visible_requirements.update({'helmet', 'glasses'})
-            if any(center_inside(bbox_center(s['bbox']), person_box) for s in supports_hands):
-                visible_requirements.add('gloves')
-            if any(center_inside(bbox_center(s['bbox']), person_box) for s in supports_ears):
-                visible_requirements.add('ear-plugs')
-
-            gated_required = set(e for e in active_required if (e in visible_requirements) or (e == 'safety-vest'))
-            missing = [e for e in gated_required if e not in present]
+            # DINÂMICO: Para cada EPI requerido, verificar se está presente ou faltando
+            missing = []
+            for req_epi in active_required:
+                if req_epi not in present:
+                    # Verificar se há suporte anatômico visível para este EPI
+                    # EPIs de cabeça precisam de head/face visível
+                    head_epis = {'helmet', 'glasses', 'face-guard', 'face-mask-medical', 'ear', 'ear-mufs', 'ear-plugs'}
+                    if req_epi in head_epis:
+                        if any(center_inside(bbox_center(s['bbox']), person_box) for s in supports_head):
+                            missing.append(req_epi)
+                    # EPIs de mão precisam de hands visível
+                    elif req_epi == 'gloves':
+                        if any(center_inside(bbox_center(s['bbox']), person_box) for s in supports_hands):
+                            missing.append(req_epi)
+                    # Outros EPIs (safety-vest, etc.) não precisam de suporte anatômico
+                    else:
+                        missing.append(req_epi)
             person['missing_epis'] = missing
             person['compliant'] = len(missing) == 0
             per_person_present.append({
@@ -495,106 +641,95 @@ class AthenaRealtimeDetector:
                     'missing_epis': missing
                 })
 
-            # Criar detecções virtuais "missing-*" com ROIs específicas por EPI ausente
+            # Criar detecções virtuais "missing-*" DINÂMICAS para todos os EPIs faltando
             for m in missing:
-                if m == 'helmet':
-                        support = find_support_in(person['bbox'], supports_head)
-                        if support is not None:
-                            vx1, vy1, vx2, vy2 = support['bbox']
-                            roi = clip_box(vx1, vy1, vx2, vy2)
-                        else:
-                            vx1 = px1 + int(0.15 * (px2 - px1))
-                            vx2 = px2 - int(0.15 * (px2 - px1))
-                            vy1 = py1
-                            vy2 = py1 + int(0.30 * ph)
-                            roi = clip_box(vx1, vy1, vx2, vy2)
-                        virtual_missing_detections.append({
-                            'bbox': roi,
-                            'confidence': 1.0,
-                            'class_name': 'missing-helmet',
-                            'class_id': -1,
-                            'frame_id': self.frame_count,
-                            'timestamp': time.time()
-                        })
-                elif m == 'glasses':
-                        support = find_support_in(person['bbox'], supports_head)
-                        if support is not None:
-                            sx1, sy1, sx2, sy2 = support['bbox']
-                            sh = max(1, sy2 - sy1)
-                            vy1 = sy1 + int(0.25 * sh)
-                            vy2 = sy1 + int(0.45 * sh)
-                            vx1 = sx1 + int(0.20 * (sx2 - sx1))
-                            vx2 = sx2 - int(0.20 * (sx2 - sx1))
-                            roi = clip_box(vx1, vy1, vx2, vy2)
-                        else:
-                            vy1 = py1 + int(0.18 * ph)
-                            vy2 = py1 + int(0.35 * ph)
-                            vx1 = px1 + int(0.25 * (px2 - px1))
-                            vx2 = px2 - int(0.25 * (px2 - px1))
-                            roi = clip_box(vx1, vy1, vx2, vy2)
-                        virtual_missing_detections.append({
-                            'bbox': roi,
-                            'confidence': 1.0,
-                            'class_name': 'missing-glasses',
-                            'class_id': -1,
-                            'frame_id': self.frame_count,
-                            'timestamp': time.time()
-                        })
-                elif m == 'safety-vest':
-                        vy1 = py1 + int(0.35 * ph)
-                        vy2 = py1 + int(0.75 * ph)
-                        vx1 = px1 + int(0.15 * (px2 - px1))
-                        vx2 = px2 - int(0.15 * (px2 - px1))
+                # Determinar região do EPI faltando baseado no tipo
+                head_epis = {'helmet', 'glasses', 'face-guard', 'face-mask-medical', 'ear', 'ear-mufs', 'ear-plugs'}
+                torso_epis = {'safety-vest', 'medical-suit', 'safety-suit'}
+                hand_epis = {'gloves'}
+                foot_epis = {'shoes', 'foot'}
+                
+                roi = None
+                
+                if m in head_epis:
+                    # EPI de cabeça: usar região superior da pessoa ou suporte de cabeça
+                    support = find_support_in(person['bbox'], supports_head)
+                    if support is not None:
+                        sx1, sy1, sx2, sy2 = support['bbox']
+                        sh = max(1, sy2 - sy1)
+                        vy1 = sy1 + int(0.20 * sh)
+                        vy2 = sy1 + int(0.50 * sh)
+                        vx1 = sx1 + int(0.20 * (sx2 - sx1))
+                        vx2 = sx2 - int(0.20 * (sx2 - sx1))
                         roi = clip_box(vx1, vy1, vx2, vy2)
-                        virtual_missing_detections.append({
-                            'bbox': roi,
-                            'confidence': 1.0,
-                            'class_name': 'missing-safety-vest',
-                            'class_id': -1,
-                            'frame_id': self.frame_count,
-                            'timestamp': time.time()
-                        })
-                elif m == 'gloves':
-                    # Gerar ausências por mão detectada sem luva sobreposta
+                    else:
+                        vx1 = px1 + int(0.20 * (px2 - px1))
+                        vx2 = px2 - int(0.20 * (px2 - px1))
+                        vy1 = py1
+                        vy2 = py1 + int(0.35 * ph)
+                        roi = clip_box(vx1, vy1, vx2, vy2)
+                elif m in torso_epis:
+                    # EPI de tronco: região central da pessoa
+                    vy1 = py1 + int(0.30 * ph)
+                    vy2 = py1 + int(0.80 * ph)
+                    vx1 = px1 + int(0.15 * (px2 - px1))
+                    vx2 = px2 - int(0.15 * (px2 - px1))
+                    roi = clip_box(vx1, vy1, vx2, vy2)
+                elif m in hand_epis:
+                    # EPI de mão: usar mãos detectadas
                     hands_in_person = [h['bbox'] for h in supports_hands if center_inside(bbox_center(h['bbox']), person_box)]
                     if hands_in_person:
+                        # Criar uma detecção missing por mão sem luva
                         for hb in hands_in_person:
-                            has_glove = False
+                            has_epi = False
                             for epi in epis_raw:
-                                if epi['class_name'] == 'gloves' and iou(epi['bbox'], hb) > 0.3:
-                                    has_glove = True
+                                if epi['class_name'] == m and iou(epi['bbox'], hb) > 0.3:
+                                    has_epi = True
                                     break
-                            if not has_glove:
+                            if not has_epi:
                                 vx1, vy1, vx2, vy2 = hb
                                 roi = clip_box(vx1, vy1, vx2, vy2)
                                 virtual_missing_detections.append({
                                     'bbox': roi,
                                     'confidence': 1.0,
-                                    'class_name': 'missing-gloves',
+                                    'class_name': f'missing-{m}',
                                     'class_id': -1,
                                     'frame_id': self.frame_count,
                                     'timestamp': time.time()
                                 })
-                elif m == 'ear-plugs':
-                    # Para cada orelha visível sem proteção
-                    ears_in_person = [e['bbox'] for e in supports_ears if center_inside(bbox_center(e['bbox']), person_box)]
-                    for eb in ears_in_person:
-                        has_protect = False
-                        for epi in epis_raw:
-                            if epi['class_name'] == 'ear-mufs' and iou(epi['bbox'], eb) > 0.2:
-                                has_protect = True
-                                break
-                        if not has_protect:
-                            vx1, vy1, vx2, vy2 = eb
-                            roi = clip_box(vx1, vy1, vx2, vy2)
-                            virtual_missing_detections.append({
-                                'bbox': roi,
-                                'confidence': 1.0,
-                                'class_name': 'missing-ear-plugs',
-                                'class_id': -1,
-                                'frame_id': self.frame_count,
-                                'timestamp': time.time()
-                            })
+                        continue  # Já adicionou, pular para próximo
+                    else:
+                        # Se não há mãos detectadas, usar região lateral da pessoa
+                        vx1 = px1
+                        vx2 = px1 + int(0.25 * (px2 - px1))
+                        vy1 = py1 + int(0.50 * ph)
+                        vy2 = py1 + int(0.75 * ph)
+                        roi = clip_box(vx1, vy1, vx2, vy2)
+                elif m in foot_epis:
+                    # EPI de pé: região inferior da pessoa
+                    vy1 = py2 - int(0.30 * ph)
+                    vy2 = py2
+                    vx1 = px1 + int(0.25 * (px2 - px1))
+                    vx2 = px2 - int(0.25 * (px2 - px1))
+                    roi = clip_box(vx1, vy1, vx2, vy2)
+                else:
+                    # EPI genérico: usar região central da pessoa
+                    vy1 = py1 + int(0.30 * ph)
+                    vy2 = py1 + int(0.70 * ph)
+                    vx1 = px1 + int(0.20 * (px2 - px1))
+                    vx2 = px2 - int(0.20 * (px2 - px1))
+                    roi = clip_box(vx1, vy1, vx2, vy2)
+                
+                # Adicionar detecção virtual missing (exceto para hand_epis que já foram adicionadas)
+                if roi:
+                    virtual_missing_detections.append({
+                        'bbox': roi,
+                        'confidence': 1.0,
+                        'class_name': f'missing-{m}',
+                        'class_id': -1,
+                        'frame_id': self.frame_count,
+                        'timestamp': time.time()
+                    })
 
         # Suavização temporal de ausências por pessoa (anti-flicker)
         def person_key(box):
@@ -722,9 +857,16 @@ class AthenaRealtimeDetector:
             else:
                 frame_small = frame
             
-            # Detecção ultra-rápida
+            # Detecção com threshold de confiança aplicado
             with torch.no_grad():
-                results = self.model(frame_small, verbose=False, imgsz=640)
+                # Aplicar threshold de confiança no modelo para filtrar falsos positivos
+                results = self.model(
+                    frame_small,
+                    conf=self.config['conf_threshold'],  # Threshold base aplicado no modelo
+                    iou=self.config['iou_threshold'],
+                    verbose=False,
+                    imgsz=640
+                )
             
             # Processar resultados
             detections = self._process_results(results, frame.shape)
@@ -737,6 +879,9 @@ class AthenaRealtimeDetector:
             
             # Avaliar compliance (associar EPIs a pessoas e inferir ausências)
             detections, violations = self._evaluate_compliance(detections)
+            
+            # FILTRAR EPIs soltos - só manter EPIs associados a pessoas
+            detections = self._filter_orphan_epis(detections)
 
             # Desenhar resultados
             processed_frame = self._draw_detections(frame, detections)
@@ -756,6 +901,12 @@ class AthenaRealtimeDetector:
             # Log para debug
             if self.frame_count % 30 == 0:
                 logger.info(f"🔍 Frame {self.frame_count}: {len(detections)} detecções")
+            elif len(detections) > 0:
+                logger.info(f"🔍 Frame {self.frame_count}: {len(detections)} detecções encontradas!")
+            
+            # Log detalhado se não houver detecções
+            if len(detections) == 0 and self.frame_count % 60 == 0:
+                logger.warning(f"⚠️ Frame {self.frame_count}: Nenhuma detecção. Modelo: {self.model is not None}, Inicializado: {self.is_initialized}")
             
             return {
                 "detections": detections,

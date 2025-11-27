@@ -387,38 +387,67 @@
                             </div>
                         </div>
                         
-                        <!-- Métricas resumidas -->
-                        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mt-6">
-                            <div class="floating-card rounded-xl p-6 text-center">
-                                <div class="w-16 h-16 athena-gradient-primary rounded-full flex items-center justify-center mx-auto mb-4">
-                                    <i class="fas fa-hard-hat text-2xl text-athena-cream"></i>
+                        <!-- Métricas Dinâmicas - Todas as classes detectadas -->
+                        <div x-show="!videoReport" class="text-center py-8">
+                            <p class="text-athena-cream/60">Nenhum relatório disponível. Gere um relatório na seção Vídeos.</p>
+                        </div>
+                        
+                        <div x-show="videoReport" class="space-y-6 mt-6">
+                            <!-- Estatísticas Gerais -->
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                <div class="bg-athena-navy/50 rounded-lg p-4 text-center">
+                                    <div class="text-2xl font-bold text-green-400" x-text="videoReport?.statistics?.total_positive_detections || 0"></div>
+                                    <div class="text-xs text-athena-cream/60 mt-1">Detecções Positivas</div>
                                 </div>
-                                <h5 class="text-lg font-semibold text-athena-cream mb-2">Com Capacete</h5>
-                                <p class="text-3xl font-bold text-green-400" x-text="stats.com_capacete || 0"></p>
+                                <div class="bg-athena-navy/50 rounded-lg p-4 text-center">
+                                    <div class="text-2xl font-bold text-red-400" x-text="videoReport?.statistics?.total_negative_detections || 0"></div>
+                                    <div class="text-xs text-athena-cream/60 mt-1">Detecções Negativas</div>
+                                </div>
+                                <div class="bg-athena-navy/50 rounded-lg p-4 text-center">
+                                    <div class="text-2xl font-bold text-athena-gold" x-text="(videoReport?.statistics?.compliance_score?.toFixed(1) || 0) + '%'"></div>
+                                    <div class="text-xs text-athena-cream/60 mt-1">Compliance Score</div>
+                                </div>
+                                <div class="bg-athena-navy/50 rounded-lg p-4 text-center">
+                                    <div class="text-2xl font-bold text-athena-cream" x-text="videoReport?.statistics?.total_pessoas || 0"></div>
+                                    <div class="text-xs text-athena-cream/60 mt-1">Total Pessoas</div>
+                                </div>
                             </div>
                             
-                            <div class="floating-card rounded-xl p-6 text-center">
-                                <div class="w-16 h-16 athena-gradient-primary rounded-full flex items-center justify-center mx-auto mb-4">
-                                    <i class="fas fa-user text-2xl text-athena-cream"></i>
+                            <!-- Cards Dinâmicos por Classe -->
+                            <div class="floating-card rounded-xl p-6">
+                                <h4 class="text-lg font-semibold text-athena-cream mb-4">Detecções por Classe</h4>
+                                <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                                    <!-- Classes Positivas (Presentes) -->
+                                    <template x-for="(count, className) in (videoReport?.statistics?.positive_by_class || {})" :key="'pos-' + className">
+                                        <div class="bg-athena-navy/50 rounded-lg p-4 text-center">
+                                            <div class="w-12 h-12 athena-gradient-primary rounded-full flex items-center justify-center mx-auto mb-2">
+                                                <i class="fas fa-check text-lg text-athena-cream"></i>
+                                            </div>
+                                            <div class="text-sm text-athena-cream/80 mb-1" x-text="className"></div>
+                                            <div class="text-xl font-bold text-green-400" x-text="count"></div>
+                                            <div class="text-xs text-athena-cream/40">Presente</div>
+                                        </div>
+                                    </template>
+                                    
+                                    <!-- Classes Negativas (Ausentes) -->
+                                    <template x-for="(count, className) in (videoReport?.statistics?.negative_by_class || {})" :key="'neg-' + className">
+                                        <div class="bg-athena-navy/50 rounded-lg p-4 text-center">
+                                            <div class="w-12 h-12 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-2">
+                                                <i class="fas fa-times text-lg text-red-400"></i>
+                                            </div>
+                                            <div class="text-sm text-athena-cream/80 mb-1" x-text="'Sem ' + className.replace('missing-', '')"></div>
+                                            <div class="text-xl font-bold text-red-400" x-text="count"></div>
+                                            <div class="text-xs text-athena-cream/40">Ausente</div>
+                                        </div>
+                                    </template>
                                 </div>
-                                <h5 class="text-lg font-semibold text-athena-cream mb-2">Sem Capacete</h5>
-                                <p class="text-3xl font-bold text-red-400" x-text="stats.sem_capacete || 0"></p>
-                            </div>
-                            
-                            <div class="floating-card rounded-xl p-6 text-center">
-                                <div class="w-16 h-16 athena-gradient-primary rounded-full flex items-center justify-center mx-auto mb-4">
-                                    <i class="fas fa-tshirt text-2xl text-athena-cream"></i>
+                                
+                                <!-- Mensagem quando não há classes -->
+                                <div x-show="(!videoReport?.statistics?.positive_by_class || Object.keys(videoReport.statistics.positive_by_class).length === 0) && (!videoReport?.statistics?.negative_by_class || Object.keys(videoReport.statistics.negative_by_class).length === 0)" 
+                                     class="text-center py-8 text-athena-cream/60">
+                                    <i class="fas fa-info-circle text-2xl mb-2"></i>
+                                    <p>Nenhuma classe detectada ainda</p>
                                 </div>
-                                <h5 class="text-lg font-semibold text-athena-cream mb-2">Com Colete</h5>
-                                <p class="text-3xl font-bold text-green-400" x-text="stats.com_colete || 0"></p>
-                            </div>
-                            
-                            <div class="floating-card rounded-xl p-6 text-center">
-                                <div class="w-16 h-16 athena-gradient-primary rounded-full flex items-center justify-center mx-auto mb-4">
-                                    <i class="fas fa-user-times text-2xl text-athena-cream"></i>
-                                </div>
-                                <h5 class="text-lg font-semibold text-athena-cream mb-2">Sem Colete</h5>
-                                <p class="text-3xl font-bold text-red-400" x-text="stats.sem_colete || 0"></p>
                             </div>
                         </div>
                     </div>
@@ -582,14 +611,31 @@
                                    @change="loadVideoForRealtimeDetection($event)"
                                    class="hidden">
                             
-                            <button @click="document.getElementById('videoUpload').click()" 
-                                    class="athena-gradient-primary px-6 py-3 rounded-lg text-athena-cream font-semibold hover:scale-105 transition-transform">
-                                <i class="fas fa-play mr-2"></i>Carregar Vídeo
-                            </button>
+                            <div class="flex space-x-3 justify-center">
+                                <button @click="document.getElementById('videoUpload').click()" 
+                                        class="athena-gradient-primary px-6 py-3 rounded-lg text-athena-cream font-semibold hover:scale-105 transition-transform">
+                                    <i class="fas fa-video mr-2"></i>Carregar Vídeo
+                                </button>
+                                
+                                <button @click="saveRealtimeReport()" 
+                                        :disabled="detectionLogs.length === 0"
+                                        :class="detectionLogs.length === 0 ? 'opacity-50 cursor-not-allowed' : 'athena-gradient-secondary'"
+                                        class="px-6 py-3 rounded-lg text-athena-cream font-semibold hover:scale-105 transition-transform">
+                                    <i class="fas fa-file-alt mr-2"></i>Gerar Relatório
+                                    <span x-show="detectionLogs.length > 0" class="ml-2 text-xs">(<span x-text="detectionLogs.length"></span>)</span>
+                                </button>
+                            </div>
+                            
+                            <p class="text-xs text-athena-cream/50 mt-2 text-center">
+                                Carregue um vídeo e clique em "Detectar" para ver a detecção em tempo real.<br>
+                                <span x-show="detectionLogs.length > 0" class="text-green-400">
+                                    <span x-text="detectionLogs.length"></span> detecções registradas. Clique em "Gerar Relatório" para ver na seção Relatório.
+                                </span>
+                            </p>
                         </div>
                         
                         <!-- Video Player -->
-                        <div x-show="currentVideo" class="mb-6">
+                        <div x-show="currentVideoUrl" class="mb-6">
                             <div id="videoContainer" class="relative bg-black rounded-xl overflow-hidden">
                                 <video id="videoPlayer" 
                                        :src="currentVideoUrl" 
@@ -607,43 +653,23 @@
                                         :height="videoDimensions.height"></canvas>
                                 
                                 <!-- Controles de detecção -->
-                                <div class="absolute top-4 right-4 bg-black/70 rounded-lg p-3">
+                                <div class="absolute top-4 right-4 bg-black/70 rounded-lg p-3 z-20">
                                     <div class="flex items-center space-x-3">
                                         <button @click="toggleDetection()" 
                                                 :class="detectionActive ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'"
-                                                class="px-3 py-1 rounded text-white text-sm font-medium transition-colors">
+                                                class="px-4 py-2 rounded text-white text-sm font-medium transition-colors">
                                             <i class="fas mr-1" :class="detectionActive ? 'fa-stop' : 'fa-play'"></i>
-                                            <span x-text="detectionActive ? 'Parar' : 'Detectar'"></span>
+                                            <span x-text="detectionActive ? 'Parar Detecção' : 'Iniciar Detecção'"></span>
                                         </button>
-                                        <button @click="toggleFullscreen()" class="px-3 py-1 rounded bg-athena-navy/70 text-white text-sm font-medium hover:bg-athena-navy/80 transition-colors">
+                                        <button @click="toggleFullscreen()" class="px-3 py-2 rounded bg-athena-navy/70 text-white text-sm font-medium hover:bg-athena-navy/80 transition-colors">
                                             <i class="fas fa-expand"></i>
                                         </button>
                                         
                                         <div class="text-white text-sm">
-                                            <div><span x-text="detectionFPS"></span></div>
-                                            <div>Detecções: <span x-text="currentDetections.length"></span></div>
+                                            <div class="font-semibold">FPS: <span x-text="detectionFPS || 0"></span></div>
+                                            <div class="text-xs">Detecções: <span x-text="currentDetections.length"></span></div>
                                         </div>
                                     </div>
-                                </div>
-                            </div>
-                            
-                            <!-- Estatísticas em tempo real -->
-                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                                <div class="bg-athena-navy/50 rounded-lg p-3 text-center">
-                                    <div class="text-lg font-bold text-athena-gold" x-text="realtimeStats.total_pessoas"></div>
-                                    <div class="text-xs text-athena-cream/60">Pessoas</div>
-                                </div>
-                                <div class="bg-athena-navy/50 rounded-lg p-3 text-center">
-                                    <div class="text-lg font-bold text-green-400" x-text="realtimeStats.com_capacete"></div>
-                                    <div class="text-xs text-athena-cream/60">Com Capacete</div>
-                                </div>
-                                <div class="bg-athena-navy/50 rounded-lg p-3 text-center">
-                                    <div class="text-lg font-bold text-green-400" x-text="realtimeStats.com_colete"></div>
-                                    <div class="text-xs text-athena-cream/60">Com Colete</div>
-                                </div>
-                                <div class="bg-athena-navy/50 rounded-lg p-3 text-center">
-                                    <div class="text-lg font-bold text-athena-gold" x-text="realtimeStats.compliance_score + '%'"></div>
-                                    <div class="text-xs text-athena-cream/60">Compliance</div>
                                 </div>
                             </div>
                         </div>

@@ -11,6 +11,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
+from collections import defaultdict
 import cv2
 import numpy as np
 
@@ -38,11 +39,15 @@ import sys
 sys.path.append(str(Path(__file__).parent.parent))
 try:
     from athena_realtime_optimized import AthenaDetectionSystemOptimized, AthenaPhase1Detector
-    from webcam_recovery import StableWebcamCapture
+    # Verificar se as classes foram importadas corretamente
+    if not hasattr(AthenaPhase1Detector, 'setup_detector'):
+        raise ImportError("AthenaPhase1Detector não tem método setup_detector")
     logger.info("✅ Usando sistema de tempo real otimizado")
+    logger.info(f"   Métodos disponíveis em AthenaPhase1Detector: {[m for m in dir(AthenaPhase1Detector) if not m.startswith('_')]}")
 except ImportError as e:
     logger.error(f"❌ Erro ao importar sistema otimizado: {e}")
-    StableWebcamCapture = None
+    import traceback
+    logger.error(traceback.format_exc())
     # Usar sistema básico como fallback
     class AthenaDetectionSystemOptimized:
         def __init__(self, *args, **kwargs):
@@ -50,6 +55,14 @@ except ImportError as e:
     class AthenaPhase1Detector:
         def __init__(self, *args, **kwargs):
             pass
+
+# Importar webcam_recovery separadamente (opcional)
+try:
+    from webcam_recovery import StableWebcamCapture
+    logger.info("✅ Sistema de recuperação de webcam disponível")
+except ImportError:
+    StableWebcamCapture = None
+    logger.warning("⚠️ Sistema de recuperação de webcam não disponível (opcional)")
 
 # ===== DETECTOR OTIMIZADO INTEGRADO =====
 
@@ -118,8 +131,21 @@ class EPIDetectorOptimizedAPI:
                 logging.error(f"❌ Modelo não encontrado: {self.model_path}")
                 return False
             
+            # Verificar se a classe foi importada corretamente
+            if not hasattr(AthenaPhase1Detector, 'setup_detector'):
+                logging.error(f"❌ Classe AthenaPhase1Detector não tem método setup_detector. Verifique a importação.")
+                logging.error(f"   Métodos disponíveis: {[m for m in dir(AthenaPhase1Detector) if not m.startswith('_')]}")
+                return False
+            
             # Inicializar detector otimizado com fonte de vídeo configurada
             self.detector = AthenaPhase1Detector(model_path=self.model_path, video_source=self.video_source)
+            
+            # Verificar se o objeto foi criado corretamente
+            if not hasattr(self.detector, 'setup_detector'):
+                logging.error(f"❌ Objeto detector não tem método setup_detector após criação.")
+                logging.error(f"   Tipo do objeto: {type(self.detector)}")
+                logging.error(f"   Métodos disponíveis: {[m for m in dir(self.detector) if not m.startswith('_')]}")
+                return False
             
             # Configurar detector SEM iniciar captura de vídeo
             self.detector.setup_detector()
@@ -132,8 +158,16 @@ class EPIDetectorOptimizedAPI:
             
             return True
             
+        except AttributeError as e:
+            logging.error(f"❌ Erro de atributo ao carregar modelo otimizado: {e}")
+            logging.error(f"   Tipo do detector: {type(self.detector) if hasattr(self, 'detector') else 'N/A'}")
+            if hasattr(self, 'detector'):
+                logging.error(f"   Métodos do detector: {[m for m in dir(self.detector) if not m.startswith('_')]}")
+            return False
         except Exception as e:
             logging.error(f"❌ Erro ao carregar modelo otimizado: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
             return False
     
     def start_system(self):
@@ -387,54 +421,51 @@ class EPIDetectorOptimizedAPI:
             return {"detections": [], "stats": self.stats}
     
     def _update_stats(self, results: Dict[str, Any]):
-        """Atualiza estatísticas baseadas nos resultados - FOCO APENAS NO CAPACETE"""
+        """Atualiza estatísticas baseadas nos resultados - TOTALMENTE DINÂMICO (sem hardcode)"""
         detections = results.get('detections', [])
         summary = results.get('summary', {})
         
-        # Mapear classes do modelo da Fase 1 para classes do sistema
-        class_mapping = {
-            'hardhat': 'helmet',
-            'helmet': 'helmet',
-            'person': 'person',
-            'no-helmet': 'no-helmet'
-        }
-        
-        # Reset contadores - FOCO APENAS NO CAPACETE
+        # Reset contadores dinâmicos - apenas contar o que o modelo detectar
         self.stats.update({
-            "com_capacete": 0,
-            "sem_capacete": 0,
-            "com_colete": 0,  # Manter para compatibilidade
-            "sem_colete": 0,  # Manter para compatibilidade
-            "total_pessoas": 0
+            "total_pessoas": 0,
+            "total_detections": len(detections),
+            "detections_by_class": defaultdict(int),
+            "positive_detections": defaultdict(int),  # Detecções positivas (presentes)
+            "negative_detections": defaultdict(int),  # Detecções negativas (ausentes)
         })
         
-        # Processar detecções e adicionar lógica de EPIs faltando
+        # Processar detecções dinamicamente - SÓ CONTAR EPIs ASSOCIADOS A PESSOAS
         processed_detections = []
-        people_detections = []
+        
+        # Separar pessoas e outras detecções
+        people_detections = [d for d in detections if d.get('class_name') == 'person']
+        other_detections = [d for d in detections if d.get('class_name') != 'person']
+        
+        # EPIs já foram filtrados no athena_realtime_optimized (só vêm associados a pessoas)
+        # Mas vamos garantir que só contamos EPIs que realmente estão associados
         
         for detection in detections:
             class_name = detection.get('class_name', '')
-            mapped_class = class_mapping.get(class_name, class_name)
-            
-            # Adicionar lógica de compliance e missing_epis
             detection_copy = detection.copy()
             
-            if mapped_class == 'helmet':
-                self.stats["com_capacete"] += 1
-                detection_copy['compliant'] = True
-                detection_copy['missing_epis'] = []
-            elif mapped_class == 'no-helmet':
-                self.stats["sem_capacete"] += 1
-                detection_copy['compliant'] = False
-                detection_copy['missing_epis'] = ['helmet']
-            elif mapped_class == 'person':
+            if class_name == 'person':
                 self.stats["total_pessoas"] += 1
-                people_detections.append(detection_copy)
-                # Para pessoas, vamos analisar EPIs faltando baseado em outras detecções
-                detection_copy['missing_epis'] = self._analyze_missing_epis_for_person(detection_copy, detections)
-                detection_copy['compliant'] = len(detection_copy['missing_epis']) == 0
+                detection_copy['compliant'] = detection.get('compliant', True)
+                detection_copy['missing_epis'] = detection.get('missing_epis', [])
+                # Contar por classe
+                self.stats["detections_by_class"][class_name] += 1
+            elif class_name.startswith('missing-'):
+                # Detecção negativa (EPI faltando) - sempre associada a pessoa
+                missing_epi = class_name.replace('missing-', '')
+                self.stats["negative_detections"][missing_epi] += 1
+                self.stats["detections_by_class"][class_name] += 1
+                detection_copy['compliant'] = False
+                detection_copy['missing_epis'] = [missing_epi]
             else:
-                # Outras classes (face, hands, etc.)
+                # Detecção positiva (EPI presente) - só contar se associado a pessoa
+                # Se chegou aqui, já foi filtrado e está associado a uma pessoa
+                self.stats["positive_detections"][class_name] += 1
+                self.stats["detections_by_class"][class_name] += 1
                 detection_copy['compliant'] = True
                 detection_copy['missing_epis'] = []
             
@@ -443,47 +474,50 @@ class EPIDetectorOptimizedAPI:
         # Atualizar detecções processadas
         self.current_detections = processed_detections
         
-        # Calcular métricas avançadas - FOCO APENAS NO CAPACETE
+        # Calcular métricas avançadas dinamicamente
         total_people = self.stats["total_pessoas"]
         if total_people > 0:
-            compliant_helmets = self.stats["com_capacete"]
-            # Para simplificar, considerar apenas capacete
-            self.stats["compliance_score"] = compliant_helmets / total_people
+            # Calcular compliance baseado em detecções positivas vs negativas
+            total_positive = sum(self.stats["positive_detections"].values())
+            total_negative = sum(self.stats["negative_detections"].values())
+            total_all = total_positive + total_negative
+            
+            if total_all > 0:
+                self.stats["compliance_score"] = (total_positive / total_all) * 100
+            else:
+                self.stats["compliance_score"] = 0.0
+            
             self.stats["detection_rate"] = len(detections) / max(1, total_people)
             
             # Confiança média
             confidences = [d.get('confidence', 0.0) for d in detections]
             self.stats["avg_confidence"] = np.mean(confidences) if confidences else 0.0
+        
+        # Converter defaultdict para dict para serialização
+        self.stats["detections_by_class"] = dict(self.stats["detections_by_class"])
+        self.stats["positive_detections"] = dict(self.stats["positive_detections"])
+        self.stats["negative_detections"] = dict(self.stats["negative_detections"])
     
     def _analyze_missing_epis_for_person(self, person_detection: Dict, all_detections: List[Dict]) -> List[str]:
-        """Analisa quais EPIs estão faltando para uma pessoa específica - FOCO APENAS NO CAPACETE"""
+        """Analisa quais EPIs estão faltando para uma pessoa - DINÂMICO (sem hardcode)"""
+        # Não assumir quais EPIs devem estar presentes
+        # Apenas retornar EPIs faltando se o modelo já detectou como "missing-*"
         missing_epis = []
         
-        # Obter bounding box da pessoa
         person_bbox = person_detection.get('bbox', [])
         if len(person_bbox) < 4:
-            return ['helmet']  # Se não conseguir analisar, assumir que falta capacete
+            return []
         
-        # Verificar se há capacete próximo à pessoa
-        has_helmet = False
-        
+        # Verificar se há detecções "missing-*" próximas à pessoa
         for detection in all_detections:
             class_name = detection.get('class_name', '')
-            bbox = detection.get('bbox', [])
-            
-            if len(bbox) < 4:
-                continue
-            
-            # Verificar se a detecção está próxima à pessoa (overlap ou proximidade)
-            if self._boxes_overlap_or_near(person_bbox, bbox):
-                if class_name in ['helmet', 'hardhat']:
-                    has_helmet = True
-                    break  # Encontrou capacete, pode parar
+            if class_name.startswith('missing-'):
+                bbox = detection.get('bbox', [])
+                if len(bbox) >= 4 and self._boxes_overlap_or_near(person_bbox, bbox):
+                    missing_epi = class_name.replace('missing-', '')
+                    if missing_epi not in missing_epis:
+                        missing_epis.append(missing_epi)
         
-        # Adicionar EPI faltando apenas se não encontrou capacete
-        if not has_helmet:
-            missing_epis.append('helmet')
-            
         return missing_epis
     
     def get_current_detections(self) -> List[Dict]:
@@ -1381,28 +1415,79 @@ async def detect_frame(
         if not app_state.detection_system or not getattr(app_state.detection_system, 'detector', None):
             raise HTTPException(status_code=500, detail="Sistema de detecção não disponível")
 
+        # Verificar se o detector está disponível e inicializado
+        detector = app_state.detection_system.detector
+        if not detector:
+            logger.error("❌ Detector não está disponível")
+            raise HTTPException(status_code=500, detail="Sistema de detecção não disponível")
+        
+        # Inicializar detector se necessário (só uma vez)
+        if hasattr(detector, 'is_initialized'):
+            if not detector.is_initialized:
+                logger.warning("⚠️ Detector não inicializado, tentando inicializar...")
+                if hasattr(detector, 'initialize_model'):
+                    if not detector.initialize_model():
+                        logger.error("❌ Falha ao inicializar detector")
+                        raise HTTPException(status_code=500, detail="Falha ao inicializar detector")
+                    else:
+                        logger.info("✅ Detector inicializado com sucesso")
+        elif hasattr(detector, 'initialize_model'):
+            # Se não tem is_initialized, tentar inicializar uma vez
+            logger.warning("⚠️ Verificando inicialização do detector...")
+            if not detector.initialize_model():
+                logger.error("❌ Falha ao inicializar detector")
+                raise HTTPException(status_code=500, detail="Falha ao inicializar detector")
+        
         # Reduzir a imagem no backend também (consistente com front)
         try:
             h, w = image.shape[:2]
+            logger.debug(f"📐 Imagem original: {w}x{h}")
             max_side = 640
             if max(h, w) > max_side:
                 scale = max_side / max(h, w)
                 new_w, new_h = int(w * scale), int(h * scale)
                 image = cv2.resize(image, (new_w, new_h))
+                logger.debug(f"📐 Imagem redimensionada: {new_w}x{new_h}")
 
-            result = app_state.detection_system.detector.process_frame(image)
+            logger.debug(f"🔍 Chamando process_frame...")
+            result = detector.process_frame(image)
+            logger.debug(f"✅ process_frame retornou: {type(result)}, keys: {result.keys() if isinstance(result, dict) else 'N/A'}")
+            
+            detections = result.get('detections', [])
+            logger.info(f"📊 Detecções encontradas: {len(detections)}")
+            
+            if len(detections) > 0:
+                logger.info(f"📋 Primeiras 3 detecções: {detections[:3]}")
+            else:
+                logger.warning("⚠️ Nenhuma detecção encontrada no frame")
+                # Log informações do modelo para debug
+                if hasattr(detector, 'model'):
+                    logger.debug(f"🔧 Modelo disponível: {detector.model is not None}")
+                if hasattr(detector, 'class_names'):
+                    logger.debug(f"📋 Classes do modelo: {len(detector.class_names)} classes")
+                if hasattr(detector, 'config'):
+                    logger.debug(f"⚙️ Config threshold: {detector.config.get('conf_threshold', 'N/A')}")
+                    
         except Exception as e:
             logger.error(f"Erro ao processar frame no detector: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Falha no processamento do frame")
-        detections = result.get('detections', [])
         
-        # Formatar resultados
+        # Formatar resultados incluindo missing_epis e compliant
         formatted_detections = []
         for detection in detections:
+            class_name = detection.get("class_name", "")
+            missing_epis = detection.get("missing_epis", [])
+            is_compliant = detection.get("compliant", True)
+            is_missing_class = class_name.startswith("missing-")
+            
             formatted_detections.append({
-                "class_name": detection.get("class_name"),
+                "class_name": class_name,
                 "confidence": float(detection.get("confidence", 0.0)),
-                "bbox": detection.get("bbox", [])
+                "bbox": detection.get("bbox", []),
+                "missing_epis": missing_epis,
+                "compliant": is_compliant and not is_missing_class,
+                "missing_epi": missing_epis[0] if missing_epis else (class_name.replace("missing-", "") if is_missing_class else None),
+                "type": "negative" if (is_missing_class or missing_epis or not is_compliant) else "positive"
             })
         
         h, w = image.shape[:2]
@@ -1575,6 +1660,77 @@ async def list_videos():
         logger.error(f"Erro ao listar vídeos: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/videos/{video_id}/report")
+async def get_video_report(video_id: str):
+    """Obtém relatório completo de detecções (positivas e negativas)"""
+    try:
+        from backend.video_report import video_report_system
+        
+        # Verificar se vídeo foi processado
+        status = video_queue.get_status(video_id)
+        if 'error' in status:
+            raise HTTPException(status_code=404, detail=status['error'])
+        
+        if status['status'] != 'completed':
+            raise HTTPException(status_code=400, detail="Vídeo ainda não foi processado")
+        
+        # Obter relatório
+        report = video_report_system.get_report(video_id)
+        
+        if not report:
+            # Criar relatório se não existir
+            if 'results' in status:
+                report = video_report_system.create_report(video_id, status['results'])
+            else:
+                raise HTTPException(status_code=404, detail="Relatório não encontrado e resultados não disponíveis")
+        
+        return {
+            "video_id": video_id,
+            "report": report
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao obter relatório do vídeo {video_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/videos/{video_id}/report/csv")
+async def export_video_report_csv(video_id: str):
+    """Exporta relatório para CSV"""
+    try:
+        from backend.video_report import video_report_system
+        
+        # Verificar se relatório existe
+        report = video_report_system.get_report(video_id)
+        if not report:
+            raise HTTPException(status_code=404, detail="Relatório não encontrado")
+        
+        # Exportar CSV
+        csv_path = video_report_system.export_csv(video_id)
+        
+        return FileResponse(
+            path=csv_path,
+            filename=f"{video_id}_report.csv",
+            media_type="text/csv"
+        )
+        
+    except Exception as e:
+        logger.error(f"Erro ao exportar CSV do vídeo {video_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/videos/reports/list")
+async def list_video_reports():
+    """Lista todos os relatórios disponíveis"""
+    try:
+        from backend.video_report import video_report_system
+        reports = video_report_system.list_reports()
+        return {
+            "reports": reports,
+            "total": len(reports)
+        }
+    except Exception as e:
+        logger.error(f"Erro ao listar relatórios: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.delete("/api/videos/{video_id}")
 async def delete_video(video_id: str):
     """Remove um vídeo e seus arquivos"""
@@ -1605,6 +1761,69 @@ async def delete_video(video_id: str):
         
     except Exception as e:
         logger.error(f"Erro ao remover vídeo {video_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Endpoint para salvar relatório de detecções em tempo real
+@app.post("/api/videos/realtime/report")
+async def save_realtime_report(report_data: Dict[str, Any]):
+    """Salva relatório de detecções em tempo real"""
+    try:
+        from backend.video_report import video_report_system
+        
+        video_id = report_data.get('video_id', f'realtime-{uuid.uuid4()}')
+        detections = report_data.get('detections', [])
+        statistics = report_data.get('statistics', {})
+        video_info = report_data.get('video_info', {})
+        
+        # Converter logs de detecção para formato de relatório
+        positive_detections = []
+        negative_detections = []
+        
+        for det in detections:
+            frame_num = det.get('frame_number', 0)
+            timestamp = det.get('timestamp', 0)
+            class_name = det.get('class_name', '')
+            
+            detection_entry = {
+                'frame_number': frame_num,
+                'timestamp': timestamp,
+                'class_name': class_name,
+                'confidence': det.get('confidence', 0.0),
+                'bbox': det.get('bbox', []),
+                'type': det.get('type', 'positive')
+            }
+            
+            if det.get('type') == 'negative' or class_name.startswith('missing-'):
+                detection_entry['missing_epi'] = det.get('missing_epi') or class_name.replace('missing-', '')
+                negative_detections.append(detection_entry)
+            else:
+                positive_detections.append(detection_entry)
+        
+        # Criar estrutura de resultados para o sistema de relatório
+        video_results = {
+            'total_frames': video_info.get('total_frames', len(detections)),
+            'processed_frames': len(detections),
+            'detections': detections,
+            'summary': {
+                'compliance_score': statistics.get('compliance_score', 0.0),
+                'total_pessoas': statistics.get('total_pessoas', 0)
+            }
+        }
+        
+        # Gerar relatório usando o sistema existente
+        report = video_report_system.create_report(video_id, video_results)
+        
+        logger.info(f"✅ Relatório em tempo real criado: {video_id} com {len(detections)} detecções")
+        
+        return {
+            "success": True,
+            "video_id": video_id,
+            "report": report,
+            "message": "Relatório gerado com sucesso"
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao salvar relatório em tempo real: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 # Rota raiz
